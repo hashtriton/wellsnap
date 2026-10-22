@@ -1,9 +1,11 @@
 //! What happens after the user finishes a snapshot, and the snapshot-set actions (copy all, save all,
-//! smart paste). Platform specifics live in clipboard/, paste.rs and export.rs.
+//! smart paste). Platform specifics live in clipboard/, paste/ and export.rs.
 
 use crate::clipboard;
 use crate::export;
 use crate::i18n::{Lang, tr};
+use crate::paste::plan::{self, Class, Profile, Shape, Step};
+use crate::paste::target::{self, Detected, Engine, Target};
 use crate::session::{self, Mark, Session};
 use crate::settings::SetCopyMode;
 use crate::state::{AppState, LastCopy};
@@ -14,12 +16,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager};
 
-/// Telegram limits: 10 media per album, 1024 caption characters (4096 with Premium, unknown to us).
-const TELEGRAM_ALBUM_MAX: usize = 10;
-const TELEGRAM_CAPTION_MAX: usize = 1024;
 /// Time for the target app to read the text before the clipboard is replaced with the files. Busy targets
 /// (Telegram decoding an album preview, a cold Electron renderer) read the clipboard late, so this is generous.
 const SMART_PASTE_GAP: Duration = Duration::from_millis(750);
+/// Rows of the paste target registry that nobody has checked by hand yet (`Status::Planned`) paste like an
+/// unknown program, in debug builds too. Set to true locally to try a planned profile.
+const ALLOW_PLANNED: bool = false;
+/// Sequential targets also stop when the foreground title changes (a chat or tab switched inside the same
+/// window). Windows only; keep it while live tests show no false stops.
+const TITLE_FINGERPRINT: bool = true;
 /// How long smart paste waits for the user to release the hotkey's modifiers before giving up.
 const MODIFIERS_RELEASE_TIMEOUT: Duration = Duration::from_millis(1500);
 /// A single copy stays available to smart paste for this long; after that the hotkey is released again.
@@ -516,51 +521,244 @@ pub fn start_cache_cleanup(app: &AppHandle) {
     });
 }
 
-/// What smart paste puts into the target besides the text.
+/// Where smart paste takes the pictures and the text from.
+enum Source {
+    /// The last single copy: its bitmap and comments. Never joined, also in one-picture mode.
+    LastCopy { png: Vec<u8>, text: String },
+    /// The snapshot set, as it was when the paste began.
+    Set(Session),
+}
+
+/// What smart paste puts on the clipboard for one `Step::Content`.
 enum PasteContent {
-    /// A snapshot set: files A.png..Z.png (album / attachments).
+    /// Files in paste order: the snapshots, or a joined sheet in place of each group (album, attachments).
     Files(Vec<PathBuf>),
-    /// A single screenshot as a bitmap.
+    /// One bitmap: a single copy, a snapshot or a joined sheet.
     Image(Vec<u8>),
+    /// The "Copy all" payload for targets that read HTML: files, text and HTML with the pictures embedded.
+    CopyAll { files: Vec<PathBuf>, text: String, html: String },
 }
 
 impl PasteContent {
-    fn count(&self) -> usize {
+    /// Files and bitmaps go without text and HTML: the text was pasted in its own step, and targets that read
+    /// both (Word, or Chromium with a bitmap) would show it twice.
+    fn write(&self) -> Result<(), String> {
         match self {
-            PasteContent::Files(files) => files.len(),
-            PasteContent::Image(_) => 1,
-        }
-    }
-
-    /// Without text and HTML: the text was pasted in the first step, and targets that read both (Word, or
-    /// Chromium with a bitmap) would show it twice.
-    fn write(self) -> Result<(), String> {
-        match self {
-            PasteContent::Files(files) => clipboard::copy_files(files, None, None),
-            PasteContent::Image(png) => clipboard::copy_image(png, None),
+            PasteContent::Files(files) => clipboard::copy_files(files.clone(), None, None),
+            PasteContent::Image(png) => clipboard::copy_image(png.clone(), None),
+            PasteContent::CopyAll { files, text, html } => {
+                clipboard::copy_files(files.clone(), Some(text.clone()), Some(html.clone()))
+            }
         }
         .map_err(|e| e.to_string())
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum PastePlan {
-    /// No text: one ordinary paste.
-    ContentOnly,
-    /// Paste the text into the field, then the pictures: one message (in Telegram the text becomes the caption).
-    TextThenContent,
-    /// Telegram cannot take this text as a caption (too long, or more than one album): paste the pictures and
-    /// leave the text in the clipboard for a separate message.
-    ContentThenTextInClipboard,
+/// What a smart paste sends, decided before anything is built or pressed.
+#[derive(Debug, PartialEq)]
+struct Decision {
+    shape: Shape,
+    /// The text to paste, with the legend line in front where the target asks for it.
+    text: String,
+    steps: Vec<Step>,
 }
 
-fn plan(text: &str, items: usize, telegram: bool) -> PastePlan {
-    if text.is_empty() {
-        PastePlan::ContentOnly
-    } else if telegram && (text.chars().count() > TELEGRAM_CAPTION_MAX || items > TELEGRAM_ALBUM_MAX) {
-        PastePlan::ContentThenTextInClipboard
+/// `letters` is None for a single copy: one bitmap, which one-picture mode leaves alone.
+fn decide(
+    lang: Lang,
+    profile: &Profile,
+    letters: Option<&[char]>,
+    text: &str,
+    html_has_images: bool,
+    one_picture_mode: bool,
+) -> Decision {
+    let shape = match letters {
+        Some(letters) => plan::shape(profile, letters, html_has_images, one_picture_mode),
+        None if matches!(profile.class, Class::TextOnly | Class::Manual) => Shape::None,
+        None => Shape::Picture,
+    };
+    let pictures = letters.map(|letters| plan::pictures(&shape, letters)).unwrap_or_default();
+    let text = plan::text_with_legend(lang, text, profile, &pictures);
+    let steps = plan::plan(&text, &shape, letters.map_or(1, <[char]>::len), profile);
+    Decision { shape, text, steps }
+}
+
+/// One action of a paste. `acts` expands the steps into these, so their order is tested without a clipboard or
+/// a keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    /// `SMART_PASTE_GAP` between two steps.
+    Pause,
+    /// The text on the clipboard. `transient` keeps it out of the clipboard history when pictures replace it
+    /// right away; text that is the whole result (a plain text editor) stays in the history.
+    PutText { transient: bool },
+    /// Content `k` on the clipboard.
+    Put(usize),
+    /// Stop when the window changed during the pause. Before every key press but the first, after the clipboard
+    /// write, so the notice can say the pictures are on the clipboard.
+    CheckFocus,
+    /// Ctrl+V (Cmd+V on macOS). Smart paste never presses Enter.
+    Paste,
+    /// The text stays on the clipboard for the user; no key press.
+    LeaveText,
+}
+
+fn acts(steps: &[Step]) -> Vec<Act> {
+    let mut acts = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        if i > 0 {
+            acts.push(Act::Pause);
+        }
+        let put = match *step {
+            Step::Text => {
+                let replaced = steps[i + 1..].iter().any(|later| matches!(later, Step::Content(_)));
+                Act::PutText { transient: replaced }
+            }
+            Step::Content(k) => Act::Put(k),
+            Step::TextToClipboard => {
+                acts.push(Act::LeaveText);
+                continue;
+            }
+        };
+        acts.push(put);
+        // The window was checked right before the first step.
+        if i > 0 {
+            acts.push(Act::CheckFocus);
+        }
+        acts.push(Act::Paste);
+    }
+    acts
+}
+
+/// How running the acts ended.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Ran {
+    /// The window changed after `done` of `total` contents were pasted.
+    stopped: Option<(usize, usize)>,
+    /// The text was left on the clipboard.
+    text_left: bool,
+}
+
+/// A window change stops the paste without an error; a failed clipboard write or key press is an error.
+fn run(acts: &[Act], text: &str, contents: &[PasteContent], still_there: impl Fn() -> bool) -> Result<Ran, String> {
+    let mut ran = Ran::default();
+    let (mut done, mut content_put) = (0, false);
+    for act in acts {
+        match *act {
+            Act::Pause => std::thread::sleep(SMART_PASTE_GAP),
+            Act::PutText { transient } => {
+                clipboard::copy_text(text.to_string(), transient).map_err(|e| e.to_string())?;
+                content_put = false;
+            }
+            Act::Put(k) => {
+                contents.get(k).ok_or("no content to paste")?.write()?;
+                content_put = true;
+            }
+            // Focus moved during the pause (a notification click, Alt+Tab): the rest would go elsewhere.
+            Act::CheckFocus => {
+                if !still_there() {
+                    ran.stopped = Some((done, contents.len()));
+                    return Ok(ran);
+                }
+            }
+            Act::Paste => {
+                crate::paste::send_paste()?;
+                done += usize::from(content_put);
+            }
+            Act::LeaveText => {
+                clipboard::copy_text(text.to_string(), false).map_err(|e| e.to_string())?;
+                ran.text_left = true;
+            }
+        }
+    }
+    Ok(ran)
+}
+
+/// The notice after the steps ran, as text and detail. None when the paste went as usual.
+fn notice_after(
+    lang: Lang,
+    ran: &Ran,
+    target: &Target,
+    profile: &Profile,
+    shape: &Shape,
+    snapshots: usize,
+    cramped: bool,
+) -> Option<(String, Option<&'static str>)> {
+    if let Some((done, total)) = ran.stopped {
+        let text = if total > 1 {
+            tr(lang, "toast.pasteStopped").replace("{done}", &done.to_string()).replace("{total}", &total.to_string())
+        } else {
+            tr(lang, "toast.windowChanged").to_string()
+        };
+        return Some((text, None));
+    }
+    if profile.class == Class::Manual {
+        let detail = ran.text_left.then(|| tr(lang, "toast.pasteManualText"));
+        return Some((tr(lang, "toast.pasteManual").to_string(), detail));
+    }
+    // Whatever the class: one-picture mode and the rich-HTML fallback join the set too.
+    let cramped = (*shape == Shape::Picture && cramped).then(|| tr(lang, "toast.pictureCramped"));
+    if ran.text_left {
+        return Some((tr(lang, "toast.textInClipboard").to_string(), cramped));
+    }
+    match shape {
+        Shape::Grouped(_) => {
+            let max = profile.max_items.unwrap_or_default().to_string();
+            Some((tr(lang, "toast.pasteGrouped").replace("{app}", target.name(lang)).replace("{max}", &max), None))
+        }
+        Shape::Picture if profile.class == Class::OnePicture && snapshots >= 2 => {
+            Some((tr(lang, "toast.pasteJoined").to_string(), cramped))
+        }
+        _ => cramped.map(|detail| (tr(lang, "toast.pastedPicture").to_string(), Some(detail))),
+    }
+}
+
+/// Registry rows of desktop messengers and mail programs, for the usage counters.
+const MESSENGERS: &[&str] = &["whatsapp", "whatsapp_mac", "viber", "zoom", "discord", "slack", "teams"];
+const MAIL: &[&str] =
+    &["outlook_classic", "outlook_new", "outlook_mac", "thunderbird", "emclient", "thebat", "apple_mail"];
+
+/// The usage counter of a paste that went through: only the kind of program, from the detected row (a planned
+/// row counts too). A page in a browser counts as the browser, whatever its title says.
+fn ok_counter(detected: &Detected) -> &'static str {
+    let id = detected.target.id;
+    if detected.engine != Engine::Native {
+        "paste_ok_browser"
+    } else if id == "tg_desktop" || id == "tg_fork" {
+        "paste_ok_telegram"
+    } else if MESSENGERS.contains(&id) {
+        "paste_ok_messenger"
+    } else if MAIL.contains(&id) {
+        "paste_ok_mail"
+    } else if id == "word" {
+        "paste_ok_office"
     } else {
-        PastePlan::TextThenContent
+        "paste_ok_other"
+    }
+}
+
+/// A smart paste that failed: the usage counter, the notice (an i18n key) and the reason under it.
+struct PasteError {
+    counter: &'static str,
+    notice: &'static str,
+    reason: String,
+}
+
+impl PasteError {
+    fn new(counter: &'static str, reason: &str) -> Self {
+        PasteError { counter, notice: "toast.pasteFailed", reason: reason.to_string() }
+    }
+
+    /// A joined picture could not be built. Nothing is pasted: files instead would give Firefox only the first
+    /// one, and a target that takes one picture only one snapshot.
+    fn picture(reason: String) -> Self {
+        PasteError { counter: "paste_fail_other", notice: "toast.pictureFailed", reason }
+    }
+}
+
+impl From<String> for PasteError {
+    fn from(reason: String) -> Self {
+        PasteError { counter: "paste_fail_other", notice: "toast.pasteFailed", reason }
     }
 }
 
@@ -587,69 +785,157 @@ pub fn smart_paste(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let _busy = busy;
-        if let Err(err) = smart_paste_blocking(&app) {
-            log::error!("smart paste failed: {err}");
-            let state = app.state::<AppState>();
-            crate::notice::toast_error(&app, tr(state.lang(), "toast.pasteFailed"), Some(&err));
-        }
+        let counter = match smart_paste_blocking(&app) {
+            Ok(counter) => counter,
+            Err(err) => {
+                log::error!("smart paste failed: {}", err.reason);
+                let state = app.state::<AppState>();
+                crate::notice::toast_error(&app, tr(state.lang(), err.notice), Some(&err.reason));
+                err.counter
+            }
+        };
+        crate::telemetry::count(counter);
     });
 }
 
-fn smart_paste_blocking(app: &AppHandle) -> Result<(), String> {
+/// Returns the usage counter of the outcome.
+fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
     let state = app.state::<AppState>();
     let lang = state.lang();
     // A single copy is cleared by every later finish and by "Copy all", so when it exists it is the newest.
-    let last =
-        state.last_copy.lock().unwrap().as_ref().map(|(_, c)| (PasteContent::Image(c.png.clone()), c.text.clone()));
-    let (content, text) = match last {
+    let last = state
+        .last_copy
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(_, c)| Source::LastCopy { png: c.png.clone(), text: c.text.clone() });
+    let source = match last {
         Some(found) => found,
         None => {
             let guard = state.session.lock().unwrap();
-            let session = guard.as_ref().filter(|s| !s.is_empty()).ok_or("nothing to paste")?;
-            (PasteContent::Files(session.files()), session.text_block(lang))
+            let session = guard.as_ref().filter(|s| !s.is_empty());
+            Source::Set(session.ok_or_else(|| PasteError::new("paste_fail_nothing", "nothing to paste"))?.clone())
         }
     };
     if !crate::paste::can_send_input() {
         crate::paste::request_input_permission();
-        return Err("input permission is missing".into());
+        return Err(PasteError::new("paste_fail_no_permission", "input permission is missing"));
     }
     // A synthetic Ctrl+V combined with held hotkey keys would be another chord (or this hotkey again).
     if !crate::paste::wait_modifiers_released(MODIFIERS_RELEASE_TIMEOUT) {
-        return Err("release the hotkey keys and try again".into());
+        return Err(PasteError::new("paste_fail_modifiers_held", "release the hotkey keys and try again"));
     }
     // Input to a window of higher integrity is dropped without an error; leave the clipboard untouched.
     if crate::paste::foreground_is_elevated() {
-        return Err("the target window runs as administrator; WellSnap cannot paste into it".into());
+        return Err(PasteError::new(
+            "paste_fail_elevated",
+            "the target window runs as administrator; WellSnap cannot paste into it",
+        ));
     }
-    let target = crate::paste::foreground_id();
-    let telegram = crate::paste::foreground_app().is_some_and(|a| crate::paste::is_telegram(&a));
+    let detected = target::detect(&crate::paste::foreground_info().unwrap_or_default());
+    let (target, profile) = target::effective(&detected, ALLOW_PLANNED);
+    let window = crate::paste::foreground_id();
+    let title = (TITLE_FINGERPRINT && profile.class == Class::Sequential).then(crate::paste::foreground_fingerprint);
+    let still_there = || {
+        crate::paste::foreground_id() == window
+            && title.as_ref().is_none_or(|title| crate::paste::foreground_fingerprint() == *title)
+    };
 
-    match plan(&text, content.count(), telegram) {
-        PastePlan::ContentOnly => {
-            content.write()?;
-            crate::paste::send_paste()
+    let (decision, snapshots, html) = match &source {
+        Source::LastCopy { text, .. } => (decide(lang, &profile, None, text, false, false), 1, None),
+        Source::Set(session) => {
+            let letters = session.letters();
+            let one_picture_mode = one_picture(app);
+            // Reads every file, so only for a target that takes the HTML.
+            let html = (profile.class == Class::RichHtml && !one_picture_mode)
+                .then(|| session.html_block_with_images(lang));
+            let has_images = html.as_ref().is_some_and(|(_, complete)| *complete);
+            let text = session.text_block(lang);
+            let decision = decide(lang, &profile, Some(&letters), &text, has_images, one_picture_mode);
+            (decision, letters.len(), html.map(|(html, _)| html))
         }
-        PastePlan::ContentThenTextInClipboard => {
-            content.write()?;
-            crate::paste::send_paste()?;
-            std::thread::sleep(SMART_PASTE_GAP);
-            clipboard::copy_text(text, false).map_err(|e| e.to_string())?;
-            crate::notice::toast(app, tr(lang, "toast.textInClipboard"));
-            Ok(())
-        }
-        PastePlan::TextThenContent => {
-            clipboard::copy_text(text, true).map_err(|e| e.to_string())?;
-            crate::paste::send_paste()?;
-            std::thread::sleep(SMART_PASTE_GAP);
-            content.write()?;
-            // Focus moved during the pause (a notification click, Alt+Tab): the pictures would go elsewhere.
-            if crate::paste::foreground_id() != target {
-                crate::notice::toast(app, tr(lang, "toast.windowChanged"));
-                return Ok(());
-            }
-            crate::paste::send_paste()
-        }
+    };
+    log::info!(
+        "smart paste: target={} class={:?} items={snapshots} steps={}",
+        target.id,
+        profile.class,
+        decision.steps.len()
+    );
+
+    // No "building" notice: showing the notice window can activate it and take the focus from the target.
+    let (contents, cramped) = build_contents(app, &source, &decision.shape, &decision.text, html)?;
+    // Building a sheet takes a while; the user may have moved on.
+    if !still_there() {
+        crate::notice::toast(app, tr(lang, "toast.pasteCancelled"));
+        return Ok("paste_fail_window_changed");
     }
+    let ran = run(&acts(&decision.steps), &decision.text, &contents, still_there)?;
+    match notice_after(lang, &ran, target, &profile, &decision.shape, snapshots, cramped) {
+        Some((text, Some(detail))) => crate::notice::toast_with_detail(app, &text, detail),
+        Some((text, None)) => crate::notice::toast(app, &text),
+        None => {}
+    }
+    if ran.stopped.is_some() {
+        return Ok("paste_fail_window_changed");
+    }
+    if ran.text_left && profile.class != Class::Manual {
+        crate::telemetry::count("paste_text_split");
+    }
+    Ok(ok_counter(&detected))
+}
+
+/// The clipboard contents of `shape`, one per `Step::Content`, and whether a joined picture of the whole set is
+/// cramped. Every sheet is built here, before the first key press, so the pause between the text and the
+/// pictures stays `SMART_PASTE_GAP`.
+fn build_contents(
+    app: &AppHandle,
+    source: &Source,
+    shape: &Shape,
+    text: &str,
+    html: Option<String>,
+) -> Result<(Vec<PasteContent>, bool), PasteError> {
+    let session = match source {
+        Source::LastCopy { .. } if *shape == Shape::None => return Ok((Vec::new(), false)),
+        Source::LastCopy { png, .. } => return Ok((vec![PasteContent::Image(png.clone())], false)),
+        Source::Set(session) => session,
+    };
+    // The comments go as text, so smart paste's sheets leave them out.
+    let sheet = |letters: &[char]| crate::sheet::ensure(app, Some(letters), false).map_err(PasteError::picture);
+    let file = |letter: char| {
+        session.get(letter).map(|s| s.path.clone()).ok_or_else(|| format!("snapshot {letter} is no longer in the set"))
+    };
+    // A group of one keeps its own file.
+    let bitmap = |group: &[char]| -> Result<PasteContent, PasteError> {
+        match group {
+            [letter] => Ok(PasteContent::Image(std::fs::read(file(*letter)?).map_err(|e| e.to_string())?)),
+            _ => Ok(PasteContent::Image(sheet(group)?.png.to_vec())),
+        }
+    };
+    let letters = session.letters();
+    Ok(match shape {
+        Shape::Files => (vec![PasteContent::Files(session.files())], false),
+        Shape::Grouped(groups) => {
+            let files = groups
+                .iter()
+                .map(|group| match group.as_slice() {
+                    [letter] => file(*letter).map_err(PasteError::from),
+                    _ => sheet(group).map(|sheet| sheet.path),
+                })
+                .collect::<Result<_, _>>()?;
+            (vec![PasteContent::Files(files)], false)
+        }
+        Shape::Each => (letters.iter().map(|&letter| bitmap(&[letter])).collect::<Result<_, _>>()?, false),
+        Shape::EachGrouped(groups) => (groups.iter().map(|group| bitmap(group)).collect::<Result<_, _>>()?, false),
+        Shape::CopyAll => {
+            let html = html.unwrap_or_default();
+            (vec![PasteContent::CopyAll { files: session.files(), text: text.to_string(), html }], false)
+        }
+        Shape::Picture => {
+            let sheet = sheet(&letters)?;
+            (vec![PasteContent::Image(sheet.png.to_vec())], sheet.cramped)
+        }
+        Shape::None => (Vec::new(), false),
+    })
 }
 
 fn record_and_maybe_nudge(app: &AppHandle, marks: u32) {
@@ -728,16 +1014,247 @@ mod tests {
         assert_eq!(picture_stem("WellSnap_2026-10-22_14-05-33", &['A']), "WellSnap_2026-10-22_14-05-33_A");
     }
 
+    /// The three paste orders before paste targets existed.
+    const CONTENT_ONLY: [Act; 2] = [Act::Put(0), Act::Paste];
+    const TEXT_THEN_CONTENT: [Act; 6] =
+        [Act::PutText { transient: true }, Act::Paste, Act::Pause, Act::Put(0), Act::CheckFocus, Act::Paste];
+    const CONTENT_THEN_TEXT: [Act; 4] = [Act::Put(0), Act::Paste, Act::Pause, Act::LeaveText];
+
+    fn letters(n: usize) -> Vec<char> {
+        (0..n).map(|i| (b'A' + i as u8) as char).collect()
+    }
+
+    /// The target and profile smart paste uses for this foreground program, as in every build.
+    fn profile_of(app: &str, title: Option<&str>) -> (&'static str, Profile) {
+        let fg = target::ForegroundInfo { app: app.into(), path: String::new(), title: title.map(str::to_string) };
+        let (target, profile) = target::effective(&target::detect(&fg), ALLOW_PLANNED);
+        (target.id, profile)
+    }
+
+    fn planned(id: &str) -> Profile {
+        target::by_id(id).unwrap().profile
+    }
+
+    fn set_acts(profile: &Profile, n: usize, text: &str) -> Vec<Act> {
+        acts(&decide(Lang::Ru, profile, Some(&letters(n)), text, true, false).steps)
+    }
+
+    fn single_acts(profile: &Profile, text: &str) -> Vec<Act> {
+        acts(&decide(Lang::Ru, profile, None, text, false, false).steps)
+    }
+
+    /// The old `plan(text, items, telegram)` cases, with the profiles detected for Telegram Desktop and for an
+    /// unknown program.
     #[test]
-    fn smart_paste_plans() {
-        assert_eq!(plan("", 3, true), PastePlan::ContentOnly);
-        assert_eq!(plan("A1 x", 3, false), PastePlan::TextThenContent);
-        assert_eq!(plan("A1 x", 3, true), PastePlan::TextThenContent);
-        assert_eq!(plan("A1 x", 11, true), PastePlan::ContentThenTextInClipboard);
-        assert_eq!(plan("A1 x", 11, false), PastePlan::TextThenContent);
-        let long = "я".repeat(TELEGRAM_CAPTION_MAX + 1);
-        assert_eq!(plan(&long, 1, true), PastePlan::ContentThenTextInClipboard);
-        assert_eq!(plan(&"я".repeat(TELEGRAM_CAPTION_MAX), 1, true), PastePlan::TextThenContent);
+    fn telegram_and_unknown_programs_paste_as_before() {
+        let (id, telegram) = profile_of("Telegram.exe", None);
+        let limits = (telegram.class, telegram.caption_max, telegram.album_max);
+        assert_eq!((id, limits), ("tg_desktop", (Class::Album, Some(1024), Some(10))));
+        assert_eq!(profile_of("ru.keepcoder.Telegram", None).0, "tg_desktop");
+        let (id, unknown) = profile_of("someapp.exe", None);
+        assert_eq!((id, unknown), (target::UNKNOWN, Profile::DEFAULT));
+
+        assert_eq!(set_acts(&telegram, 3, ""), CONTENT_ONLY);
+        assert_eq!(set_acts(&unknown, 3, "A1 x"), TEXT_THEN_CONTENT);
+        assert_eq!(set_acts(&telegram, 3, "A1 x"), TEXT_THEN_CONTENT);
+        assert_eq!(set_acts(&telegram, 10, "A1 x"), TEXT_THEN_CONTENT);
+        assert_eq!(set_acts(&telegram, 11, "A1 x"), CONTENT_THEN_TEXT);
+        assert_eq!(set_acts(&unknown, 11, "A1 x"), TEXT_THEN_CONTENT);
+        let long = "я".repeat(1025);
+        assert_eq!(single_acts(&telegram, &long), CONTENT_THEN_TEXT);
+        assert_eq!(set_acts(&telegram, 1, &long), CONTENT_THEN_TEXT);
+        assert_eq!(single_acts(&telegram, &"я".repeat(1024)), TEXT_THEN_CONTENT);
+        assert_eq!(single_acts(&unknown, &long), TEXT_THEN_CONTENT);
+        assert_eq!(single_acts(&unknown, ""), CONTENT_ONLY);
+        // Album mode: every snapshot as one file list, the text as it is.
+        for profile in [telegram, unknown] {
+            let decision = decide(Lang::Ru, &profile, Some(&letters(26)), "A1 x", true, false);
+            assert_eq!((decision.shape, decision.text.as_str()), (Shape::Files, "A1 x"));
+        }
+        let single = decide(Lang::Ru, &telegram, None, "1 x", false, false);
+        assert_eq!(single.shape, Shape::Picture);
+    }
+
+    #[test]
+    fn planned_targets_paste_like_unknown_programs_in_every_build() {
+        for (app, title) in [
+            ("slack.exe", None),
+            ("Code.exe", None),
+            ("notepad.exe", None),
+            ("chrome.exe", Some("Inbox - Gmail - Google Chrome")),
+            ("chrome.exe", Some("Chat - Claude - Google Chrome")),
+            ("firefox.exe", Some("Page \u{2014} Mozilla Firefox")),
+        ] {
+            assert_eq!(profile_of(app, title), (target::UNKNOWN, Profile::DEFAULT), "{app}");
+        }
+    }
+
+    #[test]
+    fn terminals_never_get_a_key_press() {
+        let (id, terminal) = profile_of("WindowsTerminal.exe", None);
+        assert_eq!((id, terminal.class), ("terminal", Class::Manual));
+        for one_picture_mode in [false, true] {
+            let decision = decide(Lang::En, &terminal, Some(&letters(3)), "A1 x", true, one_picture_mode);
+            assert_eq!((&decision.shape, acts(&decision.steps)), (&Shape::None, vec![Act::LeaveText]));
+        }
+        let single = decide(Lang::En, &terminal, None, "1 x", false, false);
+        assert_eq!((single.shape, acts(&single.steps)), (Shape::None, vec![Act::LeaveText]));
+        assert!(set_acts(&terminal, 3, "").is_empty());
+        assert!(single_acts(&terminal, "").is_empty());
+    }
+
+    #[test]
+    fn one_picture_mode_joins_the_set_and_keeps_the_target_rules() {
+        let (_, telegram) = profile_of("Telegram.exe", None);
+        let all = letters(12);
+        let joined = decide(Lang::Ru, &telegram, Some(&all), "A1 x", false, true);
+        assert_eq!((joined.shape, acts(&joined.steps)), (Shape::Picture, TEXT_THEN_CONTENT.to_vec()));
+        let long = decide(Lang::Ru, &telegram, Some(&all), &"я".repeat(1025), false, true);
+        assert_eq!(acts(&long.steps), CONTENT_THEN_TEXT, "the caption limit still applies");
+        let unknown = decide(Lang::Ru, &Profile::DEFAULT, Some(&all), "A1 x", true, true);
+        assert_eq!((unknown.shape, acts(&unknown.steps)), (Shape::Picture, TEXT_THEN_CONTENT.to_vec()));
+        // A single copy is one bitmap in either mode.
+        let single = |one_picture_mode| decide(Lang::Ru, &telegram, None, "1 x", false, one_picture_mode);
+        assert_eq!(single(true), single(false));
+    }
+
+    #[test]
+    fn ai_chats_get_the_legend_and_joined_groups() {
+        let claude = planned("claude");
+        let three = decide(Lang::En, &claude, Some(&letters(3)), "Screenshot A\nA1 x", true, false);
+        let legend = "Images in order: 1) Screenshot A; 2) Screenshot B; 3) Screenshot C";
+        assert_eq!(three.text, format!("{legend}\n\nScreenshot A\nA1 x"));
+        assert_eq!((three.shape, acts(&three.steps)), (Shape::Files, TEXT_THEN_CONTENT.to_vec()));
+        let all = decide(Lang::En, &claude, Some(&letters(26)), "A1 x", true, false);
+        assert_eq!(all.shape, Shape::Grouped(plan::groups(&letters(26), 20)));
+        assert!(all.text.starts_with("Images in order: 1) Screenshots A, B; 2) Screenshots C, D;"), "{}", all.text);
+        assert_eq!(acts(&all.steps), TEXT_THEN_CONTENT, "one file list");
+        assert_eq!(decide(Lang::En, &claude, Some(&letters(3)), "", true, false).text, "", "no text, no legend");
+        assert_eq!(decide(Lang::En, &claude, None, "1 x", false, false).text, "1 x", "a single copy is one picture");
+        assert_eq!(decide(Lang::En, &claude, Some(&letters(3)), "A1 x", true, true).text, "A1 x", "one picture mode");
+    }
+
+    #[test]
+    fn rich_html_and_sequential_targets() {
+        let thunderbird = planned("thunderbird");
+        let rich = decide(Lang::En, &thunderbird, Some(&letters(3)), "A1 x", true, false);
+        let expected = (Shape::CopyAll, CONTENT_ONLY.to_vec());
+        assert_eq!((rich.shape, acts(&rich.steps)), expected, "the payload has the text");
+        let too_large = decide(Lang::En, &thunderbird, Some(&letters(3)), "A1 x", false, false);
+        assert_eq!((too_large.shape, acts(&too_large.steps)), (Shape::Picture, TEXT_THEN_CONTENT.to_vec()));
+
+        let gmail = planned("gmail");
+        let each = |k| [Act::Pause, Act::Put(k), Act::CheckFocus, Act::Paste];
+        let text = vec![Act::PutText { transient: true }, Act::Paste];
+        let expected = [text, each(0).to_vec(), each(1).to_vec(), each(2).to_vec()].concat();
+        assert_eq!(set_acts(&gmail, 3, "A1 x"), expected);
+        assert_eq!(set_acts(&gmail, 2, ""), [vec![Act::Put(0), Act::Paste], each(1).to_vec()].concat());
+        let many = decide(Lang::En, &gmail, Some(&letters(26)), "A1 x", true, false);
+        assert_eq!(acts(&many.steps).iter().filter(|a| **a == Act::Paste).count(), 1 + plan::SEQUENTIAL_MAX);
+
+        let notepad = planned("text_editor");
+        assert_eq!(set_acts(&notepad, 3, "A1 x"), [Act::PutText { transient: false }, Act::Paste], "the result");
+        assert!(set_acts(&notepad, 3, "").is_empty());
+    }
+
+    #[test]
+    fn every_key_press_after_the_first_checks_the_window() {
+        let late_text = acts(&[Step::Content(0), Step::Text]);
+        let expected =
+            [Act::Put(0), Act::Paste, Act::Pause, Act::PutText { transient: false }, Act::CheckFocus, Act::Paste];
+        assert_eq!(late_text, expected);
+        for steps in [vec![Step::Text, Step::Content(0), Step::Content(1)], vec![Step::Content(0), Step::Text]] {
+            let acts = acts(&steps);
+            let presses = acts.iter().enumerate().filter(|(_, act)| **act == Act::Paste).map(|(i, _)| i);
+            for i in presses.skip(1) {
+                assert_eq!(acts[i - 1], Act::CheckFocus, "{steps:?}");
+                assert!(matches!(acts[i - 2], Act::Put(_) | Act::PutText { .. }), "written before the check");
+            }
+        }
+    }
+
+    #[test]
+    fn notices_after_the_paste() {
+        let notice = |ran: &Ran, id: &str, shape: &Shape, snapshots: usize, cramped: bool| {
+            let target = target::by_id(id).unwrap();
+            notice_after(Lang::En, ran, target, &target.profile, shape, snapshots, cramped)
+        };
+        let went = Ran::default();
+        let stopped = |done, total| Ran { stopped: Some((done, total)), text_left: false };
+        let text = |key: &str| Some((tr(Lang::En, key).to_string(), None));
+        assert_eq!(notice(&went, target::UNKNOWN, &Shape::Files, 3, false), None);
+        assert_eq!(notice(&stopped(0, 1), target::UNKNOWN, &Shape::Files, 3, false), text("toast.windowChanged"));
+        assert_eq!(
+            notice(&stopped(2, 10), "gmail", &Shape::Each, 10, false).unwrap().0,
+            "The window changed, paste stopped: 2 of 10 pasted"
+        );
+        let text_left = Ran { text_left: true, ..Ran::default() };
+        assert_eq!(notice(&text_left, "tg_desktop", &Shape::Files, 11, false), text("toast.textInClipboard"));
+        assert_eq!(
+            notice(&text_left, "terminal", &Shape::None, 3, false),
+            Some((tr(Lang::En, "toast.pasteManual").to_string(), Some(tr(Lang::En, "toast.pasteManualText"))))
+        );
+        assert_eq!(notice(&went, "terminal", &Shape::None, 3, false), text("toast.pasteManual"), "no text");
+        let grouped = Shape::Grouped(plan::groups(&letters(26), 20));
+        assert_eq!(
+            notice(&went, "claude", &grouped, 26, false).unwrap().0,
+            "Claude takes up to 20 images at a time, so some screenshots were joined into shared images"
+        );
+        assert_eq!(notice(&went, "vscode", &Shape::Picture, 3, false), text("toast.pasteJoined"));
+        assert_eq!(
+            notice(&went, "vscode", &Shape::Picture, 26, true),
+            Some((tr(Lang::En, "toast.pasteJoined").to_string(), Some(tr(Lang::En, "toast.pictureCramped"))))
+        );
+        assert_eq!(notice(&went, "vscode", &Shape::Picture, 1, false), None, "a single copy");
+        assert_eq!(notice(&went, "tg_desktop", &Shape::Picture, 12, false), None, "one-picture mode");
+        // A cramped picture is reported whatever the class: one-picture mode, the rich-HTML fallback.
+        let cramped = Some(tr(Lang::En, "toast.pictureCramped"));
+        let pasted = Some((tr(Lang::En, "toast.pastedPicture").to_string(), cramped));
+        assert_eq!(notice(&went, "tg_desktop", &Shape::Picture, 26, true), pasted);
+        assert_eq!(notice(&went, target::UNKNOWN, &Shape::Picture, 26, true), pasted);
+        assert_eq!(notice(&went, "thunderbird", &Shape::Picture, 26, true), pasted);
+        let split = Some((tr(Lang::En, "toast.textInClipboard").to_string(), cramped));
+        assert_eq!(notice(&text_left, "tg_desktop", &Shape::Picture, 26, true), split);
+        assert_eq!(notice(&went, target::UNKNOWN, &Shape::Files, 26, true), None, "only a joined picture");
+    }
+
+    #[test]
+    fn paste_counters_name_the_kind_of_program_only() {
+        let counter = |app: &str, title: Option<&str>| {
+            ok_counter(&target::detect(&target::ForegroundInfo {
+                app: app.into(),
+                path: String::new(),
+                title: title.map(str::to_string),
+            }))
+        };
+        assert_eq!(counter("Telegram.exe", None), "paste_ok_telegram");
+        assert_eq!(counter("AyuGram.exe", None), "paste_ok_telegram");
+        assert_eq!(counter("WhatsApp.Root.exe", None), "paste_ok_messenger");
+        assert_eq!(counter("OUTLOOK.EXE", None), "paste_ok_mail");
+        assert_eq!(counter("WINWORD.EXE", None), "paste_ok_office");
+        assert_eq!(counter("chrome.exe", Some("Telegram Web - Google Chrome")), "paste_ok_browser");
+        assert_eq!(counter("firefox.exe", None), "paste_ok_browser");
+        assert_eq!(counter("Code.exe", None), "paste_ok_other");
+        assert_eq!(counter("someapp.exe", None), "paste_ok_other");
+        for id in MESSENGERS.iter().chain(MAIL) {
+            assert!(target::by_id(id).is_some_and(|t| !t.apps.is_empty()), "{id} is a program in the registry");
+        }
+    }
+
+    #[test]
+    fn paste_counters_are_in_the_usage_catalog() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!("telemetry/events.json")).unwrap();
+        let counters = catalog["counters"].as_array().unwrap();
+        let source = include_str!("actions.rs");
+        let pattern = format!("{}paste_", '"');
+        let mut found = 0;
+        for (i, _) in source.match_indices(&pattern) {
+            let rest = &source[i + 1..];
+            let name = &rest[..rest.find('"').unwrap()];
+            assert!(counters.iter().any(|c| c == name), "{name} is not in events.json");
+            found += 1;
+        }
+        assert!(found >= 12, "the scan found {found} names");
     }
 
     #[test]

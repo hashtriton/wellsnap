@@ -1,7 +1,6 @@
 //! Pure planning for paste with text: which pictures the target receives (`shape`) and in which order the text
 //! and the pictures are pasted (`plan`). Building the pictures, the clipboard and the key presses stay in
 //! actions.rs; the target and its profile come from target.rs.
-#![allow(dead_code)] // Until WP4b moves smart paste in actions.rs onto these functions.
 
 use crate::i18n::{Lang, tr};
 

@@ -130,12 +130,12 @@ pub fn tr(lang: Lang, key: &str) -> &'static str {
         } else {
             "This app takes one image at a time, so the screenshots were joined into one"
         },
+        "toast.pastedPicture" => if ru { "Вставлено одной картинкой" } else { "Pasted as one image" },
         "toast.pasteGrouped" => if ru {
             "{app} принимает до {max} картинок за раз, поэтому часть снимков собрана по несколько на картинку"
         } else {
             "{app} takes up to {max} images at a time, so some screenshots were joined into shared images"
         },
-        "toast.pasteBuilding" => if ru { "Сборка картинки" } else { "Building the image" },
         "toast.pasteCancelled" => if ru { "Окно сменилось, вставка отменена" } else { "The window changed, paste cancelled" },
         "toast.pasteStopped" => if ru {
             "Окно сменилось, вставка остановлена: вставлено {done} из {total}"

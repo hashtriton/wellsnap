@@ -83,14 +83,9 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
-/// Lowercase executable name of the process that owns the foreground window. Store (UWP) apps report
-/// their frame host, "applicationframehost.exe".
-pub fn foreground_app() -> Option<String> {
-    exe_name(&process_path(foreground_pid()?)?)
-}
-
 /// The executable of the foreground window, its lowercase path and, for a browser, the window title. One
-/// GetForegroundWindow call, so the title belongs to the same window as the executable.
+/// GetForegroundWindow call, so the title belongs to the same window as the executable. Store (UWP) apps report
+/// their frame host, "applicationframehost.exe".
 pub fn foreground_info() -> Option<ForegroundInfo> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_invalid() {
@@ -101,6 +96,11 @@ pub fn foreground_info() -> Option<ForegroundInfo> {
     let path = path.to_lowercase();
     let title = if is_browser(&app, &path) { window_title(hwnd) } else { None };
     Some(ForegroundInfo { app, path, title })
+}
+
+/// The title of the foreground window, whatever program owns it: smart paste's focus check compares it.
+pub fn foreground_title() -> Option<String> {
+    window_title(unsafe { GetForegroundWindow() })
 }
 
 /// For a window of another process GetWindowTextW returns the caption Windows stores, without sending the

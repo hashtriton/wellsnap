@@ -167,7 +167,6 @@ impl Session {
 
     /// `html_block` and whether every picture is in it (false when the set is too large to embed them, or a
     /// file could not be read).
-    #[allow(dead_code)] // Used by smart paste's rich-HTML targets (WP4b).
     pub fn html_block_with_images(&self, lang: Lang) -> (String, bool) {
         self.html_with_limit(lang, HTML_IMAGES_MAX_BYTES)
     }

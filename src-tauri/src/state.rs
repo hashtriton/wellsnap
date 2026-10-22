@@ -55,7 +55,6 @@ pub struct AppState {
     /// Newer version found by the last update check, and whether it is being installed.
     pub update: Mutex<UpdatePhase>,
     /// One-picture sheets composed by the strip webview.
-    #[allow(dead_code)] // Used by the sheet bodies (WP1).
     pub sheets: crate::sheet::SheetJobs,
 }
 

@@ -17,14 +17,8 @@ pub fn send_paste() -> Result<(), String> {
     platform::send_paste()
 }
 
-/// Executable name (Windows, lowercase, e.g. "telegram.exe") or bundle id (macOS) of the foreground app.
-pub fn foreground_app() -> Option<String> {
-    platform::foreground_app()
-}
-
 /// The foreground program for `target::detect`: the executable (bundle id on macOS) and, for browsers only, the
 /// window title. The title must never be logged or stored.
-#[allow(dead_code)] // Called by smart paste from WP4b on.
 pub fn foreground_info() -> Option<target::ForegroundInfo> {
     platform::foreground_info()
 }
@@ -36,6 +30,46 @@ pub fn foreground_id() -> Option<String> {
     return platform::foreground_window().map(|hwnd| format!("{hwnd:x}"));
     #[cfg(not(windows))]
     return platform::foreground_app();
+}
+
+/// The foreground window title without unread counters (Windows; None elsewhere), whatever program owns it: a
+/// chat or tab switched inside the same window changes it, a counter that appears, changes or goes away does
+/// not. Compared in memory only, never logged or stored.
+pub fn foreground_fingerprint() -> Option<String> {
+    #[cfg(windows)]
+    return platform::foreground_title().map(|title| without_counters(&title));
+    #[cfg(not(windows))]
+    return None;
+}
+
+/// Removes every "(digits)" group with one space next to it: "(3) Inbox" and "Inbox (3) - Gmail" become "Inbox"
+/// and "Inbox - Gmail".
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn without_counters(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut rest = title;
+    while let Some(open) = rest.find('(') {
+        let inside = &rest[open + 1..];
+        let digits = inside.len() - inside.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || !inside[digits..].starts_with(')') {
+            out.push_str(&rest[..=open]);
+            rest = inside;
+            continue;
+        }
+        let after = &inside[digits + 1..];
+        match rest[..open].strip_suffix(' ') {
+            Some(before) => {
+                out.push_str(before);
+                rest = after;
+            }
+            None => {
+                out.push_str(&rest[..open]);
+                rest = after.strip_prefix(' ').unwrap_or(after);
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The foreground window belongs to a process with a higher integrity level (runs as administrator while
@@ -54,11 +88,6 @@ pub fn can_send_input() -> bool {
 
 pub fn request_input_permission() -> bool {
     platform::request_input_permission()
-}
-
-pub fn is_telegram(app: &str) -> bool {
-    let app = app.to_ascii_lowercase();
-    app.contains("telegram") || app == "ru.keepcoder.telegram" || app == "org.telegram.desktop"
 }
 
 #[cfg(windows)]
@@ -95,10 +124,22 @@ mod platform {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn telegram_detection() {
-        assert!(super::is_telegram("telegram.exe"));
-        assert!(super::is_telegram("Telegram.exe"));
-        assert!(super::is_telegram("ru.keepcoder.Telegram"));
-        assert!(!super::is_telegram("chrome.exe"));
+    fn the_fingerprint_ignores_unread_counters() {
+        use super::without_counters as f;
+        assert_eq!(f("(1) Inbox"), "Inbox");
+        assert_eq!(f("Inbox (3) - X"), "Inbox - X");
+        assert_eq!(f("Inbox (12)"), "Inbox");
+        // A counter that appears, changes or goes away.
+        assert_eq!(f("Chat"), f("(1) Chat"));
+        assert_eq!(f("(3) Chat"), f("(4) Chat"));
+        assert_eq!(f("Inbox (12) - Gmail"), f("Inbox - Gmail"));
+        assert_eq!(f("a (1) (2) b"), "a b");
+        // Other text stays, so another chat or page still differs.
+        assert_ne!(f("Chat A"), f("Chat B"));
+        assert_ne!(f("Chat 2"), f("Chat 3"));
+        assert_eq!(f("(x) Page (1a) ("), "(x) Page (1a) (");
+        assert_eq!(f("() Page"), "() Page");
+        assert_eq!(f(""), "");
+        assert_eq!(f("(7)"), "");
     }
 }

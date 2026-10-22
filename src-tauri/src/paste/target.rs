@@ -4,7 +4,6 @@
 //! The title is used once per paste and never logged or stored: it often holds a chat or mail subject. Log the
 //! target id instead. The public matrix in docs/paste-targets*.md must list every row of `REGISTRY` with the
 //! same status; the `matrix_matches_registry` test checks that.
-#![allow(dead_code)] // Until WP4b moves smart paste in actions.rs onto `detect` and `effective`.
 
 use std::fmt;
 
@@ -46,12 +45,13 @@ pub enum Engine {
     Native,
 }
 
-/// Whether a row's profile is used. Release builds use `Verified` and `Active` rows only; a `Planned` row
-/// pastes like an unknown program until someone checks it by hand. Debug builds use `Planned` rows too.
+/// Whether a row's profile is used. Smart paste uses `Verified` and `Active` rows only, in debug builds too; a
+/// `Planned` row pastes like an unknown program until someone checks it by hand (actions.rs `ALLOW_PLANNED`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// Checked by hand: the date (YYYY-MM-DD) and the program, system and WellSnap versions, as the matrix
     /// shows them.
+    #[allow(dead_code)] // No row is checked by hand yet.
     Verified { date: &'static str, version: &'static str },
     /// Shipped behaviour that is not checked for this release yet.
     Active,

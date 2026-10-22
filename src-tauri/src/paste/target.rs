@@ -51,7 +51,6 @@ pub enum Engine {
 pub enum Status {
     /// Checked by hand: the date (YYYY-MM-DD) and the program, system and WellSnap versions, as the matrix
     /// shows them.
-    #[allow(dead_code)] // No row is checked by hand yet.
     Verified { date: &'static str, version: &'static str },
     /// Shipped behaviour that is not checked for this release yet.
     Active,
@@ -116,6 +115,10 @@ const TELEGRAM: Profile = Profile {
 const TELEGRAM_WEB: Profile = Profile { caption_max: Some(TELEGRAM_CAPTION_MAX), ..Profile::of(Class::Album) };
 const ATTACH: Profile = Profile::of(Class::Attach);
 
+/// The live check of 2026-10-22: Telegram Desktop, WhatsApp Desktop, Discord, Word, eM Client and Notepad on
+/// Windows 11.
+const CHECKED_WIN: Status = Status::Verified { date: "2026-10-22", version: "Windows 11, WellSnap 0.1.0" };
+
 const fn attach(max_items: usize) -> Profile {
     Profile { max_items: Some(max_items), ..Profile::of(Class::Attach) }
 }
@@ -139,7 +142,7 @@ const fn row(
 /// the sections of the public matrix.
 pub static REGISTRY: &[Target] = &[
     // Messengers.
-    row("tg_desktop", "Telegram", &[Has("telegram")], &[], TELEGRAM, Active),
+    row("tg_desktop", "Telegram", &[Has("telegram")], &[], TELEGRAM, CHECKED_WIN),
     row(
         "tg_fork",
         "Telegram",
@@ -156,7 +159,7 @@ pub static REGISTRY: &[Target] = &[
         &[Is("whatsapp.root.exe"), Is("whatsapp.exe")],
         &[Exact("whatsapp"), Exact("whatsapp web")],
         ATTACH,
-        Planned,
+        CHECKED_WIN,
     ),
     row("whatsapp_mac", "WhatsApp", &[Is("net.whatsapp.whatsapp")], &[], ATTACH, Planned),
     row("max", "MAX", &[], &[Exact("max"), Exact("веб-версия max")], ATTACH, Planned),
@@ -176,7 +179,7 @@ pub static REGISTRY: &[Target] = &[
         profile: ATTACH,
         status: Planned,
     },
-    row("discord", "Discord", &[Is("discord.exe"), Is("com.hnc.discord")], &[Segment("discord")], attach(10), Planned),
+    row("discord", "Discord", &[Is("discord.exe"), Is("com.hnc.discord")], &[Segment("discord")], attach(10), CHECKED_WIN),
     row(
         "slack",
         "Slack",
@@ -213,8 +216,9 @@ pub static REGISTRY: &[Target] = &[
         "eM Client",
         &[Is("mailclient.exe"), Is("com.emclient.mail.client")],
         &[],
-        Profile::of(Sequential),
-        Planned,
+        // One file-list paste puts the text and every picture into the body.
+        ATTACH,
+        CHECKED_WIN,
     ),
     row("thebat", "The Bat!", &[Is("thebat64.exe"), Is("thebat.exe")], &[], Profile::of(Sequential), Planned),
     row("apple_mail", "Apple Mail", &[Is("com.apple.mail")], &[], ATTACH, Planned),
@@ -316,7 +320,8 @@ pub static REGISTRY: &[Target] = &[
         Profile::of(Sequential),
         Planned,
     ),
-    row("word", "Word", &[Is("winword.exe"), Is("com.microsoft.word")], &[], Profile::of(Sequential), Planned),
+    // Word inserts pasted picture files inline, so the text and one file list are enough.
+    row("word", "Word", &[Is("winword.exe"), Is("com.microsoft.word")], &[], ATTACH, CHECKED_WIN),
     // Browsers: rules by engine, for pages no row above recognises.
     row(GECKO_ENGINE, "Firefox", &[], &[], Profile::of(OnePicture), Planned),
     // Terminals and editors.
@@ -326,7 +331,7 @@ pub static REGISTRY: &[Target] = &[
         &[Is("notepad.exe"), Is("notepad++.exe"), Is("com.apple.textedit")],
         &[],
         Profile::of(TextOnly),
-        Planned,
+        CHECKED_WIN,
     ),
     // A multi-line paste into a console may run its lines, so nothing is pasted there.
     row(
@@ -772,7 +777,7 @@ mod tests {
             }
         }
         assert!(by_id(UNKNOWN).is_some() && by_id(GECKO_ENGINE).is_some());
-        assert_eq!(by_id("tg_desktop").unwrap().status, Status::Active, "today's Telegram rule keeps shipping");
+        assert_ne!(by_id("tg_desktop").unwrap().status, Status::Planned, "today's Telegram rule keeps shipping");
         assert_eq!(by_id("terminal").unwrap().status, Status::Active);
         for (name, _, _) in BROWSERS {
             assert_eq!(native(name), UNKNOWN, "{name}: a browser exe is no native target");

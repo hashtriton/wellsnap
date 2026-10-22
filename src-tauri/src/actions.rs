@@ -1080,13 +1080,24 @@ mod tests {
         for (app, title) in [
             ("slack.exe", None),
             ("Code.exe", None),
-            ("notepad.exe", None),
             ("chrome.exe", Some("Inbox - Gmail - Google Chrome")),
             ("chrome.exe", Some("Chat - Claude - Google Chrome")),
             ("firefox.exe", Some("Page \u{2014} Mozilla Firefox")),
         ] {
             assert_eq!(profile_of(app, title), (target::UNKNOWN, Profile::DEFAULT), "{app}");
         }
+    }
+
+    #[test]
+    fn targets_checked_live_use_their_profiles() {
+        assert_eq!(profile_of("notepad.exe", None).0, "text_editor");
+        assert_eq!(profile_of("WhatsApp.Root.exe", None).0, "whatsapp");
+        assert_eq!(profile_of("WINWORD.EXE", None).0, "word");
+        assert_eq!(profile_of("MailClient.exe", None).0, "emclient");
+        for app in ["WhatsApp.Root.exe", "WINWORD.EXE", "MailClient.exe"] {
+            assert_eq!(profile_of(app, None).1.class, Class::Attach, "{app}");
+        }
+        assert_eq!(profile_of("notepad.exe", None).1.class, Class::TextOnly);
     }
 
     #[test]

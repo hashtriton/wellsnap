@@ -212,7 +212,8 @@ const PRINT_SCREEN: &str = "PrintScreen";
 
 /// Kind of a registration error, from the text global-hotkey and WellSnap produce. On Windows global-hotkey
 /// reports ERROR_HOTKEY_ALREADY_REGISTERED as "HotKey already registered: ..."; on macOS every failure reads
-/// "Unable to register hotkey: ...", so a taken key cannot be told apart there.
+/// "Unable to register hotkey: ...", so a taken key cannot be told apart there. Texts of global-hotkey 0.8.0
+/// (error.rs), passed through unchanged by tauri-plugin-global-shortcut 2.4.1: recheck them after a bump.
 pub fn classify(err: &str) -> HotkeyErrorKind {
     if err == crate::hotkeys::RESERVED {
         HotkeyErrorKind::Reserved
@@ -230,24 +231,39 @@ pub fn report(app: &AppHandle) -> ConflictReport {
     let state = app.state::<crate::state::AppState>();
     let settings = state.settings();
     let status = state.hotkeys.lock().unwrap().clone();
-    let lang = state.lang();
     let running = match_running(&platform::running_contender_names());
-    let outcome = Outcome::of(&status);
-    let (suspects, may_double) =
-        verdict(&running, &settings.capture_hotkey, outcome, || crate::printscreen::status().onedrive_enabled);
-    let alternatives = match outcome {
-        Outcome::Failed(HotkeyErrorKind::Taken) => {
-            alternatives(&running, &settings.capture_hotkey, &settings.smart_paste_hotkey)
-        }
-        _ => Vec::new(),
-    };
-    let refs = |ids: &[ContenderId]| -> Vec<ContenderRef> { ids.iter().map(|&id| contender_ref(id, lang)).collect() };
-    ConflictReport { running: refs(&running), suspects: refs(&suspects), may_double: refs(&may_double), alternatives }
+    compose(
+        &running,
+        &settings.capture_hotkey,
+        &settings.smart_paste_hotkey,
+        Outcome::of(&status),
+        state.lang(),
+        || crate::printscreen::status().onedrive_enabled,
+    )
 }
 
 #[cfg(not(windows))]
 pub fn report(_app: &AppHandle) -> ConflictReport {
     ConflictReport::default()
+}
+
+/// The report for the running contenders and the outcome of the last registration.
+#[cfg(any(windows, test))]
+fn compose(
+    running: &[ContenderId],
+    capture: &str,
+    smart_paste: &str,
+    outcome: Outcome,
+    lang: Lang,
+    onedrive_blocking: impl FnOnce() -> bool,
+) -> ConflictReport {
+    let (suspects, may_double) = verdict(running, capture, outcome, onedrive_blocking);
+    let alternatives = match outcome {
+        Outcome::Failed(HotkeyErrorKind::Taken) => alternatives(running, capture, smart_paste),
+        _ => Vec::new(),
+    };
+    let refs = |ids: &[ContenderId]| -> Vec<ContenderRef> { ids.iter().map(|&id| contender_ref(id, lang)).collect() };
+    ConflictReport { running: refs(running), suspects: refs(&suspects), may_double: refs(&may_double), alternatives }
 }
 
 /// After the first hotkey registration at startup: warns once when another program took the capture key.
@@ -267,11 +283,13 @@ pub fn start_startup_check(_app: &AppHandle) {}
 fn startup_check(app: &AppHandle) {
     use crate::i18n::tr;
     use tauri::Manager;
-    /// Longer than the 1 s WM_SETTINGCHANGE broadcast of a take-over that `lib.rs` may be applying right now.
-    const TAKE_OVER_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+    /// Re-registrations while a take-over that `lib.rs` re-applies may still be broadcasting WM_SETTINGCHANGE:
+    /// SendMessageTimeout(HWND_BROADCAST) gives every top-level window up to 1 s, so that can take seconds.
+    const TAKE_OVER_RETRIES: u32 = 4;
+    const TAKE_OVER_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
     let state = app.state::<crate::state::AppState>();
-    let mut status = crate::hotkeys::settled_status(app);
+    let status = crate::hotkeys::settled_status(app);
     let settings = state.settings();
     if !may_warn(status.capture_error_kind, settings.onboarding_done) {
         return;
@@ -280,16 +298,6 @@ fn startup_check(app: &AppHandle) {
     let print_screen = crate::printscreen::status();
     if snipping_holds(&print_screen, &accelerator) {
         return;
-    }
-    // The re-applied take-over (lib.rs) may have switched Snipping off just now, after the first registration
-    // failed because of it: register once more before blaming another program.
-    if settings.print_screen_taken_over && print_screen.changed_by_us && same_key(&accelerator, PRINT_SCREEN) {
-        std::thread::sleep(TAKE_OVER_SETTLE);
-        crate::hotkeys::apply(app);
-        status = crate::hotkeys::settled_status(app);
-        if !may_warn(status.capture_error_kind, settings.onboarding_done) {
-            return;
-        }
     }
 
     let running = match_running(&platform::running_contender_names());
@@ -302,14 +310,30 @@ fn startup_check(app: &AppHandle) {
     if !should_warn(status.capture_error_kind, settings.onboarding_done, last, &fingerprint) {
         return;
     }
-    log::warn!("capture hotkey {accelerator} is taken; running: {running:?}, suspects: {suspects:?}");
+    // The re-applied take-over (lib.rs) may have switched Snipping off just now, after the first registration
+    // failed because of it: register again before blaming another program. This narrows the race but cannot
+    // close it; that needs this check to run after the re-apply, in the same thread.
+    if settings.print_screen_taken_over && print_screen.changed_by_us && same_key(&accelerator, PRINT_SCREEN) {
+        for _ in 0..TAKE_OVER_RETRIES {
+            std::thread::sleep(TAKE_OVER_WAIT);
+            crate::hotkeys::apply(app);
+            if !may_warn(crate::hotkeys::settled_status(app).capture_error_kind, settings.onboarding_done) {
+                return;
+            }
+        }
+    }
+    // Counts only: log lines become crash report breadcrumbs, which never carry hotkeys or installed programs.
+    log::warn!("capture hotkey is taken; {} known screenshot programs running", running.len());
     let lang = state.lang();
     let title = tr(lang, "toast.hotkeyOff").replace("{hotkey}", &crate::tray::display_hotkey(&accelerator));
     let detail = match first {
         Some(id) => tr(lang, "toast.hotkeyOffBy").replace("{app}", contender(id).name(lang)),
         None => tr(lang, "toast.hotkeyOffUnknown").to_string(),
     };
-    crate::notice::toast_error(app, &title, Some(&detail));
+    if !crate::notice::toast_error_now(app, &title, Some(&detail)) {
+        log::info!("hotkey warning dropped (a capture is running or no notice window), next start shows it");
+        return;
+    }
     // Only for the key it was about: the user may have picked another one meanwhile.
     state.update_settings(|s| {
         if s.capture_hotkey == accelerator {
@@ -350,7 +374,7 @@ fn contender(id: ContenderId) -> &'static Contender {
     CONTENDERS.iter().find(|c| c.id == id).expect("every contender id is in the table")
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn contender_ref(id: ContenderId, lang: Lang) -> ContenderRef {
     ContenderRef { id, name: contender(id).name(lang).to_string() }
 }
@@ -371,9 +395,11 @@ fn match_running(exe_names: &[String]) -> Vec<ContenderId> {
 }
 
 /// (suspects, may_double) for the capture key. Suspects only when the key is taken: running contenders that
-/// bind it, the exclusive kind first. When none binds it but OneDrive's screenshot setting is on (it may run
-/// under another exe name or start later), OneDrive is named for the keys it takes. may_double only when
-/// WellSnap registered the key: running contenders that may still react to it (hook or unknown kind).
+/// bind it, the exclusive kind first. OneDrive takes its keys only while its screenshot setting is on (off by
+/// default), so a running OneDrive counts only then; with the setting on and nothing else binding the key, it
+/// is named even when not seen running (another exe name, or it starts later). may_double only when WellSnap
+/// registered the key: running contenders that may still react to it (hook or unknown kind). The setting is
+/// read at most once, and only when OneDrive could be named.
 #[cfg(any(windows, test))]
 fn verdict(
     running: &[ContenderId],
@@ -381,13 +407,15 @@ fn verdict(
     outcome: Outcome,
     onedrive_blocking: impl FnOnce() -> bool,
 ) -> (Vec<ContenderId>, Vec<ContenderId>) {
+    let onedrive_blocking = std::cell::LazyCell::new(onedrive_blocking);
     let mut binding: Vec<&Contender> =
         running.iter().map(|&id| contender(id)).filter(|c| c.binds(accelerator)).collect();
     match outcome {
         Outcome::Failed(HotkeyErrorKind::Taken) => {
+            binding.retain(|c| c.id != ContenderId::OneDrive || *onedrive_blocking);
             binding.sort_by_key(|c| c.mechanism);
             let mut suspects: Vec<ContenderId> = binding.iter().map(|c| c.id).collect();
-            if suspects.is_empty() && contender(ContenderId::OneDrive).binds(accelerator) && onedrive_blocking() {
+            if suspects.is_empty() && contender(ContenderId::OneDrive).binds(accelerator) && *onedrive_blocking {
                 suspects.push(ContenderId::OneDrive);
             }
             (suspects, Vec::new())
@@ -446,14 +474,49 @@ mod platform {
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
     };
-    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows::Win32::System::RemoteDesktop::{
+        ProcessIdToSessionId, WTS_CURRENT_SERVER_HANDLE, WTS_PROCESS_INFOW, WTSEnumerateProcessesW, WTSFreeMemory,
+    };
     use windows::Win32::System::Threading::GetCurrentProcessId;
 
     /// Exe names of the running processes that are known contenders, in this user's session only: hotkeys are
-    /// per session, and on a terminal server the snapshot lists every user's processes. The snapshot gives names
-    /// without opening processes, so elevated ones are seen too.
+    /// per session (not per integrity level), and on a terminal server every user's processes are listed.
     pub fn running_contender_names() -> Vec<String> {
         let Some(own) = session_of(unsafe { GetCurrentProcessId() }) else { return Vec::new() };
+        match processes() {
+            Ok(all) => all
+                .into_iter()
+                .filter(|(_, session, name)| *session == own && super::contender_for(name).is_some())
+                .map(|(_, _, name)| name)
+                .collect(),
+            Err(err) => {
+                log::warn!("process list failed, using a snapshot: {err}");
+                snapshot_names(own)
+            }
+        }
+    }
+
+    /// (process id, session, exe name) of every process. The session comes with the list, so processes this one
+    /// may not open (elevated ones, for a user without admin rights) are counted too.
+    pub(super) fn processes() -> windows::core::Result<Vec<(u32, u32, String)>> {
+        let mut info: *mut WTS_PROCESS_INFOW = std::ptr::null_mut();
+        let mut count = 0;
+        unsafe { WTSEnumerateProcessesW(Some(WTS_CURRENT_SERVER_HANDLE), 0, 1, &mut info, &mut count) }?;
+        if info.is_null() {
+            return Ok(Vec::new());
+        }
+        let list = unsafe { std::slice::from_raw_parts(info, count as usize) }
+            .iter()
+            .filter(|p| !p.pProcessName.is_null())
+            .map(|p| (p.ProcessId, p.SessionId, String::from_utf16_lossy(unsafe { p.pProcessName.as_wide() })))
+            .collect();
+        unsafe { WTSFreeMemory(info.cast()) };
+        Ok(list)
+    }
+
+    /// Fallback when the session service does not answer. The session lookup needs to open the process, so
+    /// elevated contenders are missed for a user without admin rights.
+    fn snapshot_names(own: u32) -> Vec<String> {
         let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
             Ok(snapshot) => snapshot,
             Err(err) => {
@@ -478,7 +541,7 @@ mod platform {
     }
 
     /// None when the process is gone or not accessible (then it is not counted).
-    fn session_of(pid: u32) -> Option<u32> {
+    pub(super) fn session_of(pid: u32) -> Option<u32> {
         let mut session = 0;
         unsafe { ProcessIdToSessionId(pid, &mut session) }.ok().map(|_| session)
     }
@@ -606,7 +669,8 @@ mod tests {
         assert!(taken(&[], "PrintScreen").is_empty());
         // Exclusive registration first, then unknown, then hooks; running order (the table's) within a kind.
         let running = [Gyazo, Dropbox, OneDrive, Lightshot, ShareX];
-        assert_eq!(taken(&running, "PrintScreen"), [OneDrive, ShareX, Dropbox, Lightshot, Gyazo]);
+        let with_onedrive = verdict(&running, "PrintScreen", Outcome::Failed(HotkeyErrorKind::Taken), || true).0;
+        assert_eq!(with_onedrive, [OneDrive, ShareX, Dropbox, Lightshot, Gyazo]);
         assert_eq!(taken(&[Snagit, Screenpresso], "PrintScreen"), [Screenpresso, Snagit]);
         // A taken key is never a "may double" note.
         assert!(verdict(&[Gyazo], "PrintScreen", Outcome::Failed(HotkeyErrorKind::Taken), || false).1.is_empty());
@@ -628,6 +692,73 @@ mod tests {
             panic!("not needed")
         });
         assert_eq!(suspects.0, [ShareX]);
+    }
+
+    #[test]
+    fn running_onedrive_counts_only_with_its_screenshot_setting_on() {
+        let check = |running: &[ContenderId], blocking: bool| {
+            verdict(running, "PrintScreen", Outcome::Failed(HotkeyErrorKind::Taken), || blocking).0
+        };
+        // OneDrive runs on most PCs with the setting off: the program that really holds the key is named.
+        assert_eq!(check(&[OneDrive, Lightshot], false), [Lightshot]);
+        assert_eq!(check(&[OneDrive, Lightshot], true), [OneDrive, Lightshot]);
+        assert!(check(&[OneDrive], false).is_empty());
+        assert_eq!(check(&[OneDrive], true), [OneDrive]);
+        // So the startup fingerprint does not depend on whether OneDrive had started yet.
+        let first = |running: &[ContenderId]| fingerprint("PrintScreen", check(running, false).first().copied());
+        assert_eq!(first(&[OneDrive, Lightshot]), first(&[Lightshot]));
+        // Read once, even when OneDrive runs and the fallback asks again.
+        let reads = std::cell::Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            false
+        };
+        assert!(verdict(&[OneDrive], "PrintScreen", Outcome::Failed(HotkeyErrorKind::Taken), read).0.is_empty());
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn report_offers_alternatives_only_for_a_taken_key() {
+        let report = |outcome| compose(&[ShareX, Gyazo], "PrintScreen", "Ctrl+Alt+V", outcome, Lang::En, || false);
+        let taken = report(Outcome::Failed(HotkeyErrorKind::Taken));
+        let sharex = ContenderRef { id: ShareX, name: "ShareX".into() };
+        let gyazo = ContenderRef { id: Gyazo, name: "Gyazo".into() };
+        let running = vec![sharex, gyazo.clone()];
+        assert_eq!(
+            taken,
+            ConflictReport {
+                running: running.clone(),
+                suspects: running.clone(),
+                may_double: vec![],
+                alternatives: vec!["Ctrl+Alt+PrintScreen".into()],
+            }
+        );
+        let registered = report(Outcome::Registered);
+        assert_eq!(registered.may_double, [gyazo]);
+        assert!(registered.suspects.is_empty() && registered.alternatives.is_empty());
+        for outcome in [
+            Outcome::Failed(HotkeyErrorKind::Reserved),
+            Outcome::Failed(HotkeyErrorKind::Other),
+            Outcome::Unknown,
+        ] {
+            let other = report(outcome);
+            assert_eq!(other.running, running);
+            assert!(other.suspects.is_empty() && other.may_double.is_empty(), "{outcome:?}");
+            assert!(other.alternatives.is_empty(), "{outcome:?}");
+        }
+        let ru = compose(&[YandexDisk], "PrintScreen", "Ctrl+Alt+V", Outcome::Unknown, Lang::Ru, || false);
+        assert_eq!(ru.running[0].name, "Яндекс Диск");
+    }
+
+    /// The process list carries sessions without opening processes; this process is in it, in its own session.
+    #[cfg(windows)]
+    #[test]
+    fn process_list_has_this_process_and_its_session() {
+        let pid = std::process::id();
+        let all = platform::processes().expect("process list");
+        let own = all.iter().find(|(id, _, _)| *id == pid).expect("this process is listed");
+        assert_eq!(Some(own.1), platform::session_of(pid));
+        assert!(own.2.to_lowercase().ends_with(".exe"), "{}", own.2);
     }
 
     /// Lists this machine's contenders and times the scan. Run with `cargo test -- --ignored --nocapture`.

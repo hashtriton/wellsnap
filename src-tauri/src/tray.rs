@@ -64,7 +64,7 @@ fn make_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         tr(lang, "tray.support")
     };
     let off = capture_off(&state.hotkeys.lock().unwrap());
-    let capture_label = capture_label(lang, &settings.capture_hotkey, !off);
+    let capture_label = capture_label(lang, &settings.capture_hotkey, off);
 
     let capture = MenuItem::with_id(app, "capture", capture_label, true, None::<&str>)?;
     let fix = if off {
@@ -108,13 +108,14 @@ pub fn capture_off(status: &HotkeyStatus) -> bool {
     !status.capture_registered && status.capture_error.is_some()
 }
 
-/// "Take screenshot (PrtSc)", or a label that says the key does not work.
-pub fn capture_label(lang: Lang, hotkey: &str, registered: bool) -> String {
+/// "Take screenshot (PrtSc)", or, when `off` (see `capture_off`, not just "not registered": nothing is registered
+/// while Settings records a key), a label that says the key does not work.
+pub fn capture_label(lang: Lang, hotkey: &str, off: bool) -> String {
     let hotkey = display_hotkey(hotkey);
-    if registered {
-        format!("{} ({hotkey})", tr(lang, "tray.capture"))
-    } else {
+    if off {
         tr(lang, "tray.captureOff").replace("{hotkey}", &hotkey)
+    } else {
+        format!("{} ({hotkey})", tr(lang, "tray.capture"))
     }
 }
 
@@ -147,10 +148,10 @@ mod tests {
     fn capture_label_says_when_the_key_does_not_work() {
         use super::capture_label;
         use crate::i18n::Lang;
-        assert_eq!(capture_label(Lang::En, "PrintScreen", true), "Take screenshot (PrtSc)");
-        assert_eq!(capture_label(Lang::Ru, "PrintScreen", true), "Сделать скриншот (PrtSc)");
-        assert_eq!(capture_label(Lang::En, "PrintScreen", false), "Take screenshot (PrtSc is not active)");
-        assert_eq!(capture_label(Lang::Ru, "Ctrl+PrintScreen", false), "Сделать скриншот (Ctrl+PrtSc не работает)");
+        assert_eq!(capture_label(Lang::En, "PrintScreen", false), "Take screenshot (PrtSc)");
+        assert_eq!(capture_label(Lang::Ru, "PrintScreen", false), "Сделать скриншот (PrtSc)");
+        assert_eq!(capture_label(Lang::En, "PrintScreen", true), "Take screenshot (PrtSc is not active)");
+        assert_eq!(capture_label(Lang::Ru, "Ctrl+PrintScreen", true), "Сделать скриншот (Ctrl+PrtSc не работает)");
     }
 
     #[test]

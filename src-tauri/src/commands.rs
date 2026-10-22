@@ -446,6 +446,8 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn relaunch(app: AppHandle) {
+    // On the main thread `restart` skips RunEvent::Exit: mark the run as a clean exit here.
+    telemetry::shutdown();
     app.restart();
 }
 

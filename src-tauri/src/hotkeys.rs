@@ -90,7 +90,10 @@ fn apply_now(app: &AppHandle) {
             Err(err) => {
                 // Another program holds the key: a fact about the machine, counted, not reported as a bug.
                 log::warn!("capture hotkey {} not registered: {err}", settings.capture_hotkey);
-                crate::telemetry::count("hotkey_failures");
+                // Once per failure, not on every re-apply (settings saved, recheck) that finds it still taken.
+                if state.hotkeys.lock().unwrap().capture_error.is_none() {
+                    crate::telemetry::count("hotkey_failures");
+                }
                 status.capture_error = Some(err.to_string());
             }
         }

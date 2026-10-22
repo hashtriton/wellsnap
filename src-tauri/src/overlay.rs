@@ -396,7 +396,10 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     }
     if let Some(elapsed) = elapsed {
         log::info!("overlay {label} visible {:.0} ms after hotkey", elapsed.as_secs_f64() * 1000.0);
-        crate::telemetry::metric(label, "hotkeyToVisibleMs", elapsed.as_secs_f64() * 1000.0);
+        // Once per capture: the overlay that takes focus is the one under the cursor.
+        if focus {
+            crate::telemetry::metric(label, "hotkeyToVisibleMs", elapsed.as_secs_f64() * 1000.0);
+        }
     }
 }
 

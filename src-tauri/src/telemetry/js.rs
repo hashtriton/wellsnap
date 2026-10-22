@@ -89,7 +89,9 @@ pub fn page_name(label: &str) -> &str {
 pub fn event(page: &str, report: &JsErrorReport, scrubber: &Scrubber) -> (Event<'static>, String) {
     let stack = report.stack.as_deref().map(|s| scrub::truncate(s, scrub::MAX_STACK)).unwrap_or_default();
     let frames = parse_stack(&stack);
-    let (ty, value) = split_message(&report.message, report.kind);
+    // The message comes from a webview unbounded; the event keeps `MAX_TEXT` characters of it.
+    let message = scrub::truncate(&report.message, scrub::MAX_TEXT * 4);
+    let (ty, value) = split_message(&message, report.kind);
     let value = scrubber.text(&value);
     let page = page_name(page).to_string();
     let top = frames.first().map(|f| format!("{}:{}:{}", f.abs_path, f.line, f.column.unwrap_or(0)));
@@ -249,5 +251,19 @@ global code@tauri://localhost/assets/main.js:10";
         assert_eq!(exception.mechanism.as_ref().unwrap().ty, "onunhandledrejection");
         assert!(!event.extra.contains_key(DEBUG_IDS_EXTRA));
         assert_eq!(fingerprint, "js|settings|UnhandledRejection|not an Error: just text");
+    }
+
+    #[test]
+    fn a_huge_message_is_cut() {
+        let report = JsErrorReport {
+            kind: JsErrorKind::Error,
+            message: format!("Error: data:image/png;base64,{}", "A".repeat(5_000_000)),
+            stack: None,
+            debug_ids: HashMap::new(),
+        };
+        let (event, _) = event("editor", &report, &Scrubber::new(None, None, None));
+        let exception = &event.exception.values[0];
+        assert_eq!(exception.ty, "Error");
+        assert_eq!(exception.value.as_ref().unwrap().chars().count(), scrub::MAX_TEXT + 3);
     }
 }

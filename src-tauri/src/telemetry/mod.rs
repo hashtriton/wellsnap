@@ -135,11 +135,14 @@ pub fn web_content_terminated(webview: &tauri::Webview<tauri::Wry>) {
 #[cfg(target_os = "macos")]
 fn reload_allowed(label: &str) -> bool {
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    static RELOADS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+    static RELOADS: Mutex<Vec<(String, std::time::Instant)>> = Mutex::new(Vec::new());
     let mut reloads = RELOADS.lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    reloads.retain(|(_, at)| now.duration_since(*at) < Duration::from_secs(60));
+    allow_reload(&mut reloads, label, std::time::Instant::now())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn allow_reload(reloads: &mut Vec<(String, std::time::Instant)>, label: &str, now: std::time::Instant) -> bool {
+    reloads.retain(|(_, at)| now.duration_since(*at) < std::time::Duration::from_secs(60));
     if reloads.iter().filter(|(l, _)| l == label).count() >= 3 {
         return false;
     }
@@ -305,6 +308,19 @@ mod tests {
         assert!(!configured(true, dsn, None), "crash reports only: the statistics switch would lie");
         assert!(!configured(true, None, key), "statistics only: the crash modes would lie");
         assert!(!configured(true, Some(""), key));
+    }
+
+    #[test]
+    fn a_webview_reloads_at_most_three_times_a_minute() {
+        use std::time::{Duration, Instant};
+        let mut reloads = Vec::new();
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            assert!(allow_reload(&mut reloads, "editor", t0));
+        }
+        assert!(!allow_reload(&mut reloads, "editor", t0 + Duration::from_secs(30)), "a page that keeps dying");
+        assert!(allow_reload(&mut reloads, "settings", t0 + Duration::from_secs(30)), "per webview");
+        assert!(allow_reload(&mut reloads, "editor", t0 + Duration::from_secs(61)), "a minute later");
     }
 
     #[test]

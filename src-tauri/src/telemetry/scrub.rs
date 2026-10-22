@@ -1,13 +1,15 @@
-//! Removes what could name the user or the machine from everything a report carries: the home folder, the
-//! user name and host name, `\Users\<name>\`, `/Users/<name>/` and `/home/<name>/` segments, UNC server
-//! names and screenshot file names. Runs in `before_send` (in both processes), `before_breadcrumb`, on log
-//! lines and on JavaScript messages and stacks. No regex dependency: a few small scanners over chars.
+//! Removes what could name the user or the machine from everything a report carries: the home folder and the
+//! custom save folder, the user name and host name, `\Users\<name>\`, `/Users/<name>/` and `/home/<name>/`
+//! segments, the organization in `OneDrive - <name>`, UNC server names and screenshot file names. Other folder
+//! names stay (install and system paths are what a crash report needs). Runs in `before_send` (in both
+//! processes), `before_breadcrumb`, on log lines and on JavaScript messages and stacks. No regex dependency: a
+//! few small scanners over chars.
 //!
 //! The minidump itself is binary and is not touched here; its module list carries the install path, which a
 //! Sentry server-side rule ("Usernames in filepaths" on `$minidump.code_file`) removes.
 
 use sentry::protocol::{Breadcrumb, DebugImage, Event, Stacktrace, User, Value};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Longest message, exception value or breadcrumb kept.
 pub const MAX_TEXT: usize = 500;
@@ -18,27 +20,38 @@ const USER: &str = "<user>";
 const HOME: &str = "<home>";
 const HOST: &str = "<host>";
 const FILE: &str = "<file>";
+const SAVE_DIR: &str = "<save_dir>";
+const ORG: &str = "<org>";
 
 pub struct Scrubber {
     /// The home folder split into its path components, so `\`, `/` and doubled `\\` (Debug output) match.
     home: Option<Vec<Vec<char>>>,
     user: Option<Vec<char>>,
     host: Option<Vec<char>>,
+    /// The custom save folder (Settings), which can name a client or a project; changes at runtime.
+    save_dir: Mutex<Option<Vec<Vec<char>>>>,
+}
+
+/// A folder as path components; None for a drive root or less.
+fn path_parts(path: &str) -> Option<Vec<Vec<char>>> {
+    let parts: Vec<Vec<char>> = path.split(is_sep).filter(|c| !c.is_empty()).map(|c| c.chars().collect()).collect();
+    (parts.len() >= 2).then_some(parts)
 }
 
 impl Scrubber {
     /// Names shorter than 3 characters would replace parts of ordinary words.
     pub fn new(home: Option<&str>, user: Option<&str>, host: Option<&str>) -> Self {
         let long = |v: &str| v.trim().chars().count() >= 3;
-        let parts = |h: &str| -> Vec<Vec<char>> {
-            h.split(is_sep).filter(|c| !c.is_empty()).map(|c| c.chars().collect()).collect()
-        };
-        let home = home.map(parts).filter(|parts| parts.len() >= 2);
         Scrubber {
-            home,
+            home: home.and_then(path_parts),
             user: user.filter(|v| long(v)).map(|v| v.trim().chars().collect()),
             host: host.filter(|v| long(v)).map(|v| v.trim().chars().collect()),
+            save_dir: Mutex::new(None),
         }
+    }
+
+    pub fn set_save_dir(&self, dir: Option<&str>) {
+        *self.save_dir.lock().unwrap_or_else(|e| e.into_inner()) = dir.map(str::trim).and_then(path_parts);
     }
 
     /// The running user's names, read once.
@@ -56,10 +69,16 @@ impl Scrubber {
     /// Everything identifying replaced; the length is kept as it is.
     pub fn clean(&self, input: &str) -> String {
         let mut s: Vec<char> = input.chars().collect();
+        // First: the save folder is often inside the home folder.
+        let save_dir = self.save_dir.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(save_dir) = &save_dir {
+            s = replace_path(&s, save_dir, SAVE_DIR);
+        }
         if let Some(home) = &self.home {
-            s = replace_home(&s, home);
+            s = replace_path(&s, home, HOME);
         }
         s = user_segments(&s);
+        s = onedrive_orgs(&s);
         s = unc_hosts(&s);
         if let Some(user) = &self.user {
             s = replace_word(&s, user, USER);
@@ -70,9 +89,10 @@ impl Scrubber {
         image_names(&s).into_iter().collect()
     }
 
-    /// `clean` and cut to `MAX_TEXT` characters.
+    /// `clean` and cut to `MAX_TEXT` characters. A long input is cut before cleaning too, with room for what the
+    /// replacements shorten, so a huge message (a data: URL in an error) is not scanned in full.
     pub fn text(&self, input: &str) -> String {
-        truncate(&self.clean(input), MAX_TEXT)
+        truncate(&self.clean(&truncate(input, MAX_TEXT * 4)), MAX_TEXT)
     }
 
     /// The whole event: texts, frames, breadcrumbs, tags, extras and module paths. The host name and the user
@@ -186,8 +206,8 @@ fn push_str(out: &mut Vec<char>, s: &str) {
     out.extend(s.chars());
 }
 
-/// The end of the home folder path starting at `at`, separators of any kind and count between components.
-fn home_at(s: &[char], at: usize, parts: &[Vec<char>]) -> Option<usize> {
+/// The end of the folder path starting at `at`, separators of any kind and count between components.
+fn path_at(s: &[char], at: usize, parts: &[Vec<char>]) -> Option<usize> {
     let mut j = at;
     for (k, part) in parts.iter().enumerate() {
         if k > 0 {
@@ -207,14 +227,14 @@ fn home_at(s: &[char], at: usize, parts: &[Vec<char>]) -> Option<usize> {
     (j == s.len() || !is_word(s[j])).then_some(j)
 }
 
-fn replace_home(s: &[char], parts: &[Vec<char>]) -> Vec<char> {
+fn replace_path(s: &[char], parts: &[Vec<char>], with: &str) -> Vec<char> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
         if (i == 0 || !is_word(s[i - 1]))
-            && let Some(end) = home_at(s, i, parts)
+            && let Some(end) = path_at(s, i, parts)
         {
-            push_str(&mut out, HOME);
+            push_str(&mut out, with);
             i = end;
             continue;
         }
@@ -256,6 +276,37 @@ fn user_segments(s: &[char]) -> Vec<char> {
                         continue;
                     }
                 }
+            }
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A work OneDrive folder is named after the organization: `OneDrive - Contoso Ltd` becomes `OneDrive - <org>`.
+/// The name runs to the next separator; at the end of a path (no separator follows) only up to a space, as in
+/// `user_segments`.
+fn onedrive_orgs(s: &[char]) -> Vec<char> {
+    const MARKER: [char; 11] = ['o', 'n', 'e', 'd', 'r', 'i', 'v', 'e', ' ', '-', ' '];
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if (i == 0 || is_sep(s[i - 1])) && matches_at(s, i, &MARKER) {
+            let start = i + MARKER.len();
+            let mut end = start;
+            while end < s.len() && !ends_segment(s[end]) {
+                end += 1;
+            }
+            if end >= s.len() || !is_sep(s[end]) {
+                end = (start..end).find(|&k| s[k].is_whitespace()).unwrap_or(end);
+            }
+            let name: String = s[start..end].iter().collect();
+            if !name.is_empty() && name != ORG {
+                out.extend_from_slice(&s[i..start]);
+                push_str(&mut out, ORG);
+                i = end;
+                continue;
             }
         }
         out.push(s[i]);
@@ -373,7 +424,10 @@ mod tests {
     #[test]
     fn user_folders_of_other_users_and_onedrive() {
         let s = Scrubber::new(None, None, None);
-        assert_eq!(s.clean(r"D:\Users\bob\OneDrive - Contoso\x.txt"), r"D:\Users\<user>\OneDrive - Contoso\x.txt");
+        assert_eq!(s.clean(r"D:\Users\bob\OneDrive - Contoso\x.txt"), r"D:\Users\<user>\OneDrive - <org>\x.txt");
+        assert_eq!(s.clean(r"<home>\OneDrive - Acme Corp Ltd\Docs"), r"<home>\OneDrive - <org>\Docs");
+        assert_eq!(s.clean("/Users/x/OneDrive - Acme failed"), "/Users/<user>/OneDrive - <org> failed");
+        assert_eq!(s.clean(r"<home>\OneDrive\Docs"), r"<home>\OneDrive\Docs", "a personal OneDrive has no name");
         assert_eq!(s.clean("/Users/alice/Library/Logs"), "/Users/<user>/Library/Logs");
         assert_eq!(s.clean("/home/carol/.config"), "/home/<user>/.config");
         assert_eq!(s.clean(r"C:\\Users\\John Smith\\Desktop"), r"C:\\Users\\<user>\\Desktop");
@@ -412,11 +466,32 @@ mod tests {
     }
 
     #[test]
+    fn the_custom_save_folder() {
+        let s = windows();
+        s.set_save_dir(Some(r"D:\Clients\Acme Corp"));
+        assert_eq!(s.clean(r"saved to D:\Clients\Acme Corp\Invoice.png"), r"saved to <save_dir>\<file>.png");
+        assert_eq!(s.clean(r#"detail: Some("D:\\Clients\\Acme Corp")"#), r#"detail: Some("<save_dir>")"#);
+        assert_eq!(s.clean(r"D:\Clients\Acme Corporation"), r"D:\Clients\Acme Corporation", "a whole folder only");
+        // Inside the home folder: the save folder goes first and whole.
+        s.set_save_dir(Some(r"C:\Users\Анна Петрова\Projects\X"));
+        assert_eq!(s.clean(r"C:\Users\Анна Петрова\Projects\X\a"), r"<save_dir>\a");
+        assert_eq!(s.clean(r"C:\Users\Анна Петрова\Projects\Y"), r"<home>\Projects\Y");
+        s.set_save_dir(Some(r"D:\"));
+        assert_eq!(s.clean(r"D:\x"), r"D:\x", "a drive root is not a name");
+        s.set_save_dir(None);
+        assert_eq!(s.clean(r"D:\Clients\Acme Corp"), r"D:\Clients\Acme Corp");
+    }
+
+    #[test]
     fn texts_are_cut() {
         assert_eq!(truncate("абв", 2), "аб...");
         assert_eq!(truncate("абв", 3), "абв");
         let long = "x".repeat(MAX_TEXT + 10);
         assert_eq!(Scrubber::new(None, None, None).text(&long).chars().count(), MAX_TEXT + 3);
+        // A huge input is cut before cleaning and still scrubbed where it is kept.
+        let huge = format!(r"C:\Users\anna\a {}", "y".repeat(1_000_000));
+        let text = Scrubber::new(None, None, None).text(&huge);
+        assert!(text.starts_with(r"C:\Users\<user>\a yyy") && text.chars().count() == MAX_TEXT + 3, "{text}");
     }
 
     #[test]

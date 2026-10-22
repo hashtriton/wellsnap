@@ -13,7 +13,7 @@ use super::usage::{self, Common};
 use super::{SentItem, SentKind};
 use crate::settings::CrashMode;
 use crate::state::AppState;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -28,8 +28,6 @@ const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
 
 static WOKEN: Mutex<bool> = Mutex::new(false);
 static WAKE: Condvar = Condvar::new();
-/// "Send" on the crash card or in Settings: upload the outbox once even in "ask" mode.
-static SEND_ONCE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -61,11 +59,6 @@ pub fn batch_url(host: Option<&str>) -> String {
 pub fn wake() {
     *WOKEN.lock().unwrap_or_else(|e| e.into_inner()) = true;
     WAKE.notify_all();
-}
-
-pub fn request_send() {
-    SEND_ONCE.store(true, Ordering::SeqCst);
-    wake();
 }
 
 fn sleep(timeout: Duration) {
@@ -111,23 +104,19 @@ fn tick(app: &AppHandle, client: &reqwest::Client, common: &Common) {
     usage::roll_now();
     let settings = app.state::<AppState>().settings();
     let (Some(state), Some(dirs)) = (store::get(), store::dirs()) else { return };
-    let send_once = SEND_ONCE.swap(false, Ordering::SeqCst);
-    if !settings.onboarding_done || !state.consent_seen {
-        // A "Send" before onboarding is done waits for it.
-        SEND_ONCE.fetch_or(send_once, Ordering::SeqCst);
+    if !gate_open(settings.onboarding_done, state.consent_seen) {
         return;
     }
     let now = now_secs();
-    match settings.crash_reports {
-        CrashMode::Never => outbox::purge(&dirs.outbox()),
-        mode if mode == CrashMode::Always || send_once => {
-            if state.crash_retry.ready(now) {
-                send_outbox(client, &dirs.outbox(), now);
-            } else {
-                SEND_ONCE.fetch_or(send_once, Ordering::SeqCst);
-            }
-        }
-        _ => {}
+    if settings.crash_reports == CrashMode::Never {
+        outbox::purge(&dirs.outbox());
+    } else if state.crash_retry.ready(now) {
+        // A "Send" in "ask" mode stays in telemetry.json, so a failed upload (offline, 5xx, 429) tries again later.
+        let files: Vec<_> = outbox::list(&dirs.outbox())
+            .into_iter()
+            .filter(|f| outbox::sendable(f, settings.crash_reports, state.crash_approved_until))
+            .collect();
+        send_outbox(client, &files, now);
     }
     let usage_due = settings.usage_stats
         && usage::ON.load(Ordering::Relaxed)
@@ -170,7 +159,15 @@ fn post(
     })
 }
 
-fn send_outbox(client: &reqwest::Client, dir: &std::path::Path, now: i64) {
+/// Nothing goes out before onboarding is done and the switches were seen.
+fn gate_open(onboarding_done: bool, consent_seen: bool) -> bool {
+    onboarding_done && consent_seen
+}
+
+fn send_outbox(client: &reqwest::Client, files: &[outbox::OutboxFile], now: i64) {
+    if files.is_empty() {
+        return;
+    }
     let Some(dsn) = option_env!("WELLSNAP_SENTRY_DSN").and_then(|d| d.trim().parse::<sentry::types::Dsn>().ok()) else {
         return;
     };
@@ -179,7 +176,7 @@ fn send_outbox(client: &reqwest::Client, dir: &std::path::Path, now: i64) {
         ("X-Sentry-Auth", dsn.to_auth(Some(&user_agent())).to_string()),
         ("Content-Type", "application/x-sentry-envelope".to_string()),
     ];
-    for file in outbox::list(dir) {
+    for file in files {
         let Ok(bytes) = std::fs::read(&file.path) else { continue };
         let (status, retry_after) = post(client, &url, &headers, bytes.clone());
         match verdict(status, retry_after.as_deref()) {
@@ -274,6 +271,14 @@ mod tests {
         assert_eq!(verdict(Some(503), Some("30")), Verdict::Backoff);
         assert_eq!(verdict(None, None), Verdict::Backoff, "offline");
         assert_eq!(verdict(Some(301), None), Verdict::Backoff);
+    }
+
+    #[test]
+    fn nothing_goes_out_before_onboarding_and_the_switches() {
+        assert!(!gate_open(false, false));
+        assert!(!gate_open(true, false), "an older install that has not seen the Privacy tab yet");
+        assert!(!gate_open(false, true));
+        assert!(gate_open(true, true));
     }
 
     #[test]

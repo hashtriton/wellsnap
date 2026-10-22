@@ -37,6 +37,9 @@ pub struct Store {
     pub onboarding_event_sent: bool,
     /// "Don't send" answers in a row; 3 switch the crash reports to "never".
     pub dont_send_streak: u32,
+    /// "Send" in "ask" mode approved the crash reports written up to this time (unix ms, as in the outbox file
+    /// names); they wait for the network without asking again.
+    pub crash_approved_until: i64,
     pub crash_retry: Retry,
     pub usage_retry: Retry,
     pub limits: Limits,
@@ -242,11 +245,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let dirs = Dirs::under(&dir, &dir);
         assert_eq!(load(&dirs), Store::default());
-        let store = Store { crash_id: Some("c".into()), consent_seen: true, dont_send_streak: 2, ..Default::default() };
+        let store = Store {
+            crash_id: Some("c".into()),
+            consent_seen: true,
+            dont_send_streak: 2,
+            crash_approved_until: 7,
+            ..Default::default()
+        };
         save(&dirs, &store).unwrap();
         assert_eq!(load(&dirs), store);
         let json = std::fs::read_to_string(dirs.store()).unwrap();
         assert!(json.contains("\"crashId\"") && json.contains("\"dontSendStreak\""));
+        assert!(json.contains("\"crashApprovedUntil\""));
         std::fs::write(dirs.store(), r#"{"usageId": "u"}"#).unwrap();
         assert_eq!(load(&dirs).usage_id.as_deref(), Some("u"), "missing fields default");
         std::fs::write(dirs.store(), "{ nope").unwrap();

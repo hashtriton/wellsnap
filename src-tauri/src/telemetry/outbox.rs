@@ -89,17 +89,20 @@ pub fn accept(dir: &Path, envelope: &Envelope, mode: CrashMode, now_ms: i64) -> 
     Ok(Some(path))
 }
 
-/// The envelope as Sentry reads it. A JavaScript event carries its script debug ids in an extra; the typed
-/// protocol has no source map image, so that event is written as JSON with `debug_meta.images` of type
-/// "sourcemap" (https://docs.sentry.io/platforms/javascript/sourcemaps/troubleshooting_js/debug-ids/).
+/// The envelope as Sentry reads it. A JavaScript event is written as JSON, for two fields the typed protocol
+/// lacks: its script debug ids (an extra here) become `debug_meta.images` of type "sourcemap"
+/// (https://docs.sentry.io/platforms/javascript/sourcemaps/troubleshooting_js/debug-ids/), and
+/// `sdk.settings.infer_ip` is "never": without it Relay's legacy rule fills in the sender's IP for platform
+/// "javascript" events that have no `user.ip_address`.
 fn serialize(envelope: &Envelope) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
-    let Some(event) = envelope.event().filter(|e| e.extra.contains_key(DEBUG_IDS_EXTRA)) else {
+    let Some(event) = envelope.event().filter(|e| e.platform == "javascript") else {
         envelope.to_writer(&mut out)?;
         return Ok(out);
     };
     let mut json = serde_json::to_value(event).map_err(std::io::Error::other)?;
-    let ids = json["extra"].as_object_mut().and_then(|extra| extra.remove(DEBUG_IDS_EXTRA));
+    json["sdk"]["settings"]["infer_ip"] = Value::from("never");
+    let ids = json.get_mut("extra").and_then(Value::as_object_mut).and_then(|extra| extra.remove(DEBUG_IDS_EXTRA));
     let images: Vec<Value> = ids
         .as_ref()
         .and_then(Value::as_object)
@@ -107,7 +110,9 @@ fn serialize(envelope: &Envelope) -> std::io::Result<Vec<u8>> {
         .flatten()
         .map(|(code_file, id)| serde_json::json!({"type": "sourcemap", "code_file": code_file, "debug_id": id}))
         .collect();
-    json["debug_meta"] = serde_json::json!({ "images": images });
+    if !images.is_empty() {
+        json["debug_meta"] = serde_json::json!({ "images": images });
+    }
     let payload = serde_json::to_vec(&json).map_err(std::io::Error::other)?;
     writeln!(out, "{}", serde_json::json!({ "event_id": event.event_id.to_string() }))?;
     writeln!(out, "{}", serde_json::json!({ "type": "event", "length": payload.len() }))?;
@@ -172,11 +177,35 @@ pub fn prune(dir: &Path, now_ms: i64) {
     }
 }
 
-/// Deletes every waiting report (crash mode "never", "Don't send", Delete).
+/// Deletes every waiting report (crash mode "never", Delete).
 pub fn purge(dir: &Path) {
-    for file in list(dir) {
+    remove_if(dir, |_| true);
+}
+
+pub fn remove_if(dir: &Path, gone: impl Fn(&OutboxFile) -> bool) {
+    for file in list(dir).into_iter().filter(|f| gone(f)) {
         let _ = std::fs::remove_file(file.path);
     }
+}
+
+/// Whether the uploader sends this file now: everything in "always"; in "ask" only the crash reports the user
+/// approved with "Send" (errors kept from an earlier "always" never go out on that answer).
+pub fn sendable(file: &OutboxFile, mode: CrashMode, approved_until: i64) -> bool {
+    match mode {
+        CrashMode::Always => true,
+        CrashMode::Ask => file.fatal && file.ms <= approved_until,
+        CrashMode::Never => false,
+    }
+}
+
+/// Crash reports the "ask" card asks about: not approved yet.
+pub fn unanswered(file: &OutboxFile, approved_until: i64) -> bool {
+    file.fatal && file.ms > approved_until
+}
+
+/// The newest crash report on disk, the mark a "Send" approves up to.
+pub fn newest_fatal(dir: &Path) -> Option<i64> {
+    list(dir).iter().filter(|f| f.fatal).map(|f| f.ms).max()
 }
 
 /// The history line for an uploaded file: its title, and the event JSON as it was sent.
@@ -242,7 +271,7 @@ fn title(event: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentry::protocol::{Attachment, AttachmentType, Event, Exception};
+    use sentry::protocol::{Attachment, AttachmentType, ClientSdkInfo, Event, Exception};
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("wellsnap-test-outbox-{name}-{}", std::process::id()));
@@ -311,7 +340,51 @@ mod tests {
             serde_json::json!([{"type": "sourcemap", "code_file": "app:///assets/a.js", "debug_id": "4f7a-id"}])
         );
         assert!(payload["extra"].get(DEBUG_IDS_EXTRA).is_none());
+        assert_eq!(payload["sdk"]["settings"]["infer_ip"], "never");
         assert_eq!(describe(&bytes, 0).kind, SentKind::Error);
+
+        // Without debug ids: still no IP inference, and no empty sections.
+        let sdk =
+            ClientSdkInfo { name: "sentry.rust".into(), version: "0.49.3".into(), integrations: vec![], packages: vec![] };
+        let bare = Event {
+            level: Level::Error,
+            platform: "javascript".into(),
+            sdk: Some(std::borrow::Cow::Owned(sdk)),
+            ..Default::default()
+        };
+        let bytes = serialize(&Envelope::from(bare)).unwrap();
+        let read = Envelope::from_slice(&bytes).unwrap();
+        assert_eq!(read.event().unwrap().sdk.as_ref().unwrap().name, "sentry.rust", "the SDK reader still parses it");
+        let payload: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().lines().nth(2).unwrap()).unwrap();
+        assert_eq!(payload["sdk"]["settings"]["infer_ip"], "never");
+        assert!(payload.get("debug_meta").is_none() && payload.get("extra").is_none(), "{payload}");
+    }
+
+    #[test]
+    fn ask_mode_sends_only_approved_crashes() {
+        let file = |ms: i64, fatal: bool| OutboxFile { path: PathBuf::new(), ms, fatal, size: 1 };
+        let (old_crash, old_error, new_crash) = (file(100, true), file(50, false), file(300, true));
+        for f in [&old_crash, &old_error, &new_crash] {
+            assert!(sendable(f, CrashMode::Always, 0));
+            assert!(!sendable(f, CrashMode::Never, i64::MAX));
+        }
+        // "Send" approved everything up to 200: the crash written later waits for its own answer.
+        assert!(sendable(&old_crash, CrashMode::Ask, 200));
+        assert!(!sendable(&old_error, CrashMode::Ask, 200), "errors are never part of a crash answer");
+        assert!(!sendable(&new_crash, CrashMode::Ask, 200));
+        assert!(!unanswered(&old_crash, 200) && !unanswered(&old_error, 200) && unanswered(&new_crash, 200));
+
+        let dir = temp_dir("approve");
+        accept(&dir, &envelope(Level::Fatal), CrashMode::Always, 10).unwrap();
+        accept(&dir, &envelope(Level::Error), CrashMode::Always, 20).unwrap();
+        accept(&dir, &envelope(Level::Fatal), CrashMode::Always, 30).unwrap();
+        assert_eq!(newest_fatal(&dir), Some(30));
+        remove_if(&dir, |f| !f.fatal);
+        assert_eq!(list(&dir).iter().map(|f| f.ms).collect::<Vec<_>>(), [10, 30]);
+        remove_if(&dir, |f| unanswered(f, 10));
+        assert_eq!(list(&dir).iter().map(|f| f.ms).collect::<Vec<_>>(), [10]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

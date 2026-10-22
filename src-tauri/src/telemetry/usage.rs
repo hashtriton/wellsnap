@@ -115,7 +115,10 @@ fn gauge(name: &'static str, value: u64) {
     if !ON.load(Ordering::Relaxed) {
         return;
     }
-    debug_assert!(catalog().gauges.contains(name), "usage gauge {name} is not in events.json");
+    if !catalog().gauges.contains(name) {
+        debug_assert!(false, "usage gauge {name} is not in events.json");
+        return;
+    }
     let today = today();
     store::update_quiet(|s| {
         roll(&mut s.usage, &today);
@@ -172,7 +175,15 @@ pub fn queue(data: &mut UsageData, event: &str, properties: Map<String, Value>) 
         catalog().events.get(event).is_some_and(|allowed| properties.keys().all(|k| allowed.contains(k))),
         "{event} or one of its properties is not in events.json"
     );
+    // With no relay in between, release builds enforce the list here too.
+    let Some(properties) = listed(event, properties) else { return };
     push(data, PendingEvent { uuid: store::new_id(), event: event.into(), timestamp: now_iso(), properties });
+}
+
+/// The properties events.json lists for `event`; None for an event it does not list.
+fn listed(event: &str, properties: Map<String, Value>) -> Option<Map<String, Value>> {
+    let allowed = catalog().events.get(event)?;
+    Some(properties.into_iter().filter(|(key, _)| allowed.contains(key)).collect())
 }
 
 /// `log_metric` names: `captureMs(<transport>)` from the overlay, and the core's `READY_METRIC`.
@@ -411,6 +422,17 @@ mod tests {
         }
         assert_eq!(data.pending.len(), MAX_PENDING);
         assert_eq!(data.pending[0].event, "e5");
+    }
+
+    #[test]
+    fn unlisted_events_and_properties_are_dropped() {
+        let props = Map::from_iter([
+            ("source".to_string(), json!("settings")),
+            ("save_dir".to_string(), json!(r"C:\Users\anna\Shots")),
+        ]);
+        let kept = Map::from_iter([("source".to_string(), json!("settings"))]);
+        assert_eq!(listed("stats_enabled", props.clone()), Some(kept));
+        assert_eq!(listed("file_saved", props), None);
     }
 
     #[test]

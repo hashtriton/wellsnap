@@ -13,7 +13,7 @@
 
 use super::outbox::{self, DiskTransport};
 use super::paths::Dirs;
-use super::scrub::Scrubber;
+use super::scrub::{self, Scrubber};
 use super::{CrashAnswer, JsErrorReport, js, store, upload, usage};
 use crate::settings::{CrashMode, Settings};
 use crate::state::AppState;
@@ -35,6 +35,8 @@ const PROMPT_RETRY: Duration = Duration::from_secs(30);
 const PROMPT_ATTEMPTS: u32 = 40;
 /// "Don't send" answers in a row that turn crash reports off.
 const DONT_SEND_LIMIT: u32 = 3;
+/// Scope tag the app sends to the crash reporter when the crash mode changes; `before_send` removes it.
+const MODE_TAG: &str = "wellsnap.crash_mode";
 
 /// The client is set up: a sending build, not a plain debug run, and the folders are known.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -86,6 +88,7 @@ pub fn early_init() -> Option<sentry::ClientInitGuard> {
     let settings: Settings =
         std::fs::read(dirs.settings()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     outbox::set_mode(settings.crash_reports);
+    Scrubber::global().set_save_dir(settings.save_dir.as_deref());
     let state = store::init(dirs.clone());
     // Counters work from here on: the hotkeys are registered before `start`.
     usage::ON.store(settings.usage_stats, Ordering::Relaxed);
@@ -124,8 +127,31 @@ pub fn early_init() -> Option<sentry::ClientInitGuard> {
         );
     }
     let guard = sentry::init(options);
+    #[cfg(all(target_os = "macos", panic = "abort"))]
+    if settings.crash_reports != CrashMode::Never {
+        abort_without_minidump();
+    }
     ACTIVE.store(true, Ordering::SeqCst);
     Some(guard)
+}
+
+/// With `panic = "abort"` std aborts right after the panic hooks, and on macOS crash-handler catches that SIGABRT,
+/// so the reporter would send the panic a second time as a minidump. Runs after sentry-panic's hook (installed
+/// by `sentry::init`), which has written the panic report to the outbox by then.
+#[cfg(all(target_os = "macos", panic = "abort"))]
+fn abort_without_minidump() {
+    // <signal.h> on macOS: `sighandler_t signal(int, sighandler_t)`, SIGABRT is 6 and SIG_DFL is 0.
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    const SIGABRT: i32 = 6;
+    const SIG_DFL: usize = 0;
+    let next = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        next(info);
+        // SAFETY: restores the default action for SIGABRT; the process aborts right after this hook returns.
+        unsafe { signal(SIGABRT, SIG_DFL) };
+    }));
 }
 
 fn dist() -> &'static str {
@@ -141,6 +167,12 @@ fn dist() -> &'static str {
 /// Runs for every event in both processes: consent, the random id, tags, the process-wide breadcrumbs and
 /// scrubbing.
 fn before_send(mut event: Event<'static>) -> Option<Event<'static>> {
+    // In the crash reporter: the mode the app switched to after the reporter started (see `settings_changed`).
+    if let Some(mode) = event.tags.remove(MODE_TAG)
+        && let Ok(mode) = serde_json::from_value(Value::String(mode))
+    {
+        outbox::set_mode(mode);
+    }
     let keep = match outbox::mode() {
         CrashMode::Always => true,
         CrashMode::Ask => event.level == Level::Fatal,
@@ -149,7 +181,9 @@ fn before_send(mut event: Event<'static>) -> Option<Event<'static>> {
     if !keep {
         return None;
     }
-    event.user = Some(User { id: lock(&CRASH_ID).clone(), ..Default::default() });
+    // The reporter's scope holds the id "Reset install number" sent over IPC; its CRASH_ID is the one at its start.
+    let id = event.user.as_ref().and_then(|u| u.id.clone()).or_else(|| lock(&CRASH_ID).clone());
+    event.user = Some(User { id, ..Default::default() });
     event.dist = Some(Cow::Borrowed(dist()));
     // The native module list means nothing for a script error; its source map images come from the outbox.
     if event.platform == "javascript" {
@@ -242,7 +276,7 @@ pub fn on_log(record: &log::Record) {
         sentry::capture_event(Event {
             level: Level::Error,
             logger: Some(record.target().to_string()),
-            message: Some(message.to_string()),
+            message: Some(scrub::truncate(message, scrub::MAX_TEXT * 4)),
             stacktrace: sentry::integrations::backtrace::current_stacktrace(),
             fingerprint: Cow::Owned(vec!["log".into(), file.into(), line.to_string().into()]),
             ..Default::default()
@@ -415,11 +449,11 @@ fn start_crash_prompt(app: &AppHandle) {
             let settings = app.state::<AppState>().settings();
             let Some(state) = store::get() else { return };
             let Some(dirs) = store::dirs() else { return };
-            let waiting = outbox::list(&dirs.outbox()).iter().filter(|f| f.fatal).count() as u32;
+            let files = outbox::list(&dirs.outbox());
+            let waiting = files.iter().filter(|f| outbox::unanswered(f, state.crash_approved_until)).count() as u32;
             if settings.crash_reports != CrashMode::Ask
                 || !settings.onboarding_done
                 || !state.consent_seen
-                || state.dont_send_streak >= DONT_SEND_LIMIT
                 || waiting == 0
             {
                 return;
@@ -443,15 +477,30 @@ pub fn settings_changed(app: &AppHandle, before: &Settings, after: &Settings) {
         return;
     }
     outbox::set_mode(after.crash_reports);
+    Scrubber::global().set_save_dir(after.save_dir.as_deref());
     if before.crash_reports != after.crash_reports {
+        // A new choice starts a new count of "Don't send" answers.
+        store::update(|s| s.dont_send_streak = 0);
+        // The reporter read the mode at its start; a switch to "never" must reach it before a native crash.
+        if let Ok(Value::String(mode)) = serde_json::to_value(after.crash_reports) {
+            sentry::with_integration(|minidump: &MinidumpIntegration, _| {
+                minidump.set_tag(MODE_TAG.into(), Some(mode));
+            });
+        }
+        let outbox_dir = store::dirs().map(|dirs| dirs.outbox());
         match after.crash_reports {
             CrashMode::Never => {
-                if let Some(dirs) = store::dirs() {
-                    outbox::purge(&dirs.outbox());
+                if let Some(dir) = &outbox_dir {
+                    outbox::purge(dir);
                 }
             }
             CrashMode::Always => upload::wake(),
-            CrashMode::Ask => {}
+            // Errors kept under "always" (or before onboarding) are not crashes the card would ask about.
+            CrashMode::Ask => {
+                if let Some(dir) = &outbox_dir {
+                    outbox::remove_if(dir, |f| !f.fatal);
+                }
+            }
         }
     }
     usage::ON.store(after.usage_stats, Ordering::Relaxed);
@@ -504,32 +553,43 @@ pub fn crash_prompt_answer(app: &AppHandle, answer: CrashAnswer) {
     if !active() {
         return;
     }
-    let purge = || {
-        if let Some(dirs) = store::dirs() {
-            outbox::purge(&dirs.outbox());
-        }
-    };
+    let Some(dir) = store::dirs().map(|dirs| dirs.outbox()) else { return };
+    let approved_until = store::get().map_or(0, |s| s.crash_approved_until);
     match answer {
         CrashAnswer::Send => {
-            store::update(|s| s.dont_send_streak = 0);
-            upload::request_send();
+            let newest = outbox::newest_fatal(&dir).unwrap_or(0);
+            store::update(|s| s.crash_approved_until = s.crash_approved_until.max(newest));
         }
-        CrashAnswer::DontSend => {
-            purge();
-            let streak = store::update(|s| {
-                s.dont_send_streak += 1;
-                s.dont_send_streak
-            });
-            if streak.is_some_and(|n| n >= DONT_SEND_LIMIT) {
+        // Reports approved earlier and still waiting for the network stay.
+        CrashAnswer::DontSend => outbox::remove_if(&dir, |f| outbox::unanswered(f, approved_until)),
+        CrashAnswer::Always => {}
+        CrashAnswer::Delete => outbox::purge(&dir),
+    }
+    let mode = store::update(|s| {
+        let (streak, mode) = after_answer(s.dont_send_streak, answer);
+        s.dont_send_streak = streak;
+        mode
+    })
+    .flatten();
+    match mode {
+        Some(mode) => {
+            if mode == CrashMode::Never {
                 log::info!("crash reports turned off after {DONT_SEND_LIMIT} \"don't send\" answers");
-                set_crash_mode(app, CrashMode::Never);
             }
+            set_crash_mode(app, mode);
         }
-        CrashAnswer::Always => {
-            store::update(|s| s.dont_send_streak = 0);
-            set_crash_mode(app, CrashMode::Always);
-        }
-        CrashAnswer::Delete => purge(),
+        None => upload::wake(),
+    }
+}
+
+/// The "Don't send" streak after an answer, and the crash mode the answer switches to.
+fn after_answer(streak: u32, answer: CrashAnswer) -> (u32, Option<CrashMode>) {
+    match answer {
+        CrashAnswer::Send => (0, None),
+        CrashAnswer::DontSend if streak + 1 >= DONT_SEND_LIMIT => (streak + 1, Some(CrashMode::Never)),
+        CrashAnswer::DontSend => (streak + 1, None),
+        CrashAnswer::Always => (0, Some(CrashMode::Always)),
+        CrashAnswer::Delete => (streak, None),
     }
 }
 
@@ -594,6 +654,20 @@ mod tests {
         outbox::set_mode(CrashMode::Always);
         assert!(before_send(error()).is_some());
 
+        // The crash reporter: an id from "Reset install number" on its scope wins over the one read at its start.
+        let reset = Event { user: Some(User { id: Some("new-id".into()), ..Default::default() }), ..crash() };
+        assert_eq!(before_send(reset).unwrap().user.unwrap().id.as_deref(), Some("new-id"));
+        // The mode the app switched to reaches it as a scope tag, which never leaves the process.
+        let mut tagged = crash();
+        tagged.tags.insert(MODE_TAG.into(), "never".into());
+        assert!(before_send(tagged).is_none(), "switched to never after the reporter started");
+        assert_eq!(outbox::mode(), CrashMode::Never);
+        let mut tagged = crash();
+        tagged.tags.insert(MODE_TAG.into(), "ask".into());
+        assert!(!before_send(tagged).unwrap().tags.contains_key(MODE_TAG));
+        assert_eq!(outbox::mode(), CrashMode::Ask);
+        outbox::set_mode(CrashMode::Always);
+
         // The whole path of a captured event: client, before_send, the disk transport.
         let dir = std::env::temp_dir().join(format!("wellsnap-test-crash-client-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -612,6 +686,19 @@ mod tests {
         let message = event.message.unwrap();
         assert!(message.ends_with("<user>/<file>.png") || message.ends_with(r"<user>\<file>.png"), "{message}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn three_dont_send_answers_in_a_row_turn_reports_off() {
+        assert_eq!(after_answer(0, CrashAnswer::DontSend), (1, None));
+        assert_eq!(after_answer(1, CrashAnswer::DontSend), (2, None));
+        assert_eq!(after_answer(2, CrashAnswer::DontSend), (3, Some(CrashMode::Never)));
+        assert_eq!(after_answer(2, CrashAnswer::Send), (0, None), "Send breaks the streak");
+        assert_eq!(after_answer(2, CrashAnswer::Always), (0, Some(CrashMode::Always)));
+        assert_eq!(after_answer(2, CrashAnswer::Delete), (2, None), "Settings > Delete is not an answer to the card");
+        // `settings_changed` resets the streak on any new crash mode, so "Ask" chosen again starts from 0 and
+        // takes three more answers.
+        assert_eq!(after_answer(0, CrashAnswer::DontSend).1, None);
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub enum NoticePayload {
     /// WellSnap restarted into `version`; the pill hides itself on the frontend.
     #[serde(rename_all = "camelCase")]
     Updated { version: String, has_notes: bool, set_cleared: bool },
+    /// Crash reports wait for an answer (crash mode "ask"); `count` of them.
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))] // Shown only by builds with telemetry.
+    CrashPrompt { count: u32 },
 }
 
 pub fn toast(app: &AppHandle, text: &str) {
@@ -69,6 +72,12 @@ pub fn show_updated(app: &AppHandle, version: &str, has_notes: bool, set_cleared
     show_now(app, NoticePayload::Updated { version: version.to_string(), has_notes, set_cleared })
 }
 
+/// Blocks until shown, like `show_updated`; false when dropped (a capture is running), so the caller retries.
+#[cfg(feature = "telemetry")]
+pub fn show_crash_prompt(app: &AppHandle, count: u32) -> bool {
+    show_now(app, NoticePayload::CrashPrompt { count })
+}
+
 fn show_now(app: &AppHandle, payload: NoticePayload) -> bool {
     let _serial = NOTICE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let skip = |payload: &NoticePayload| {
@@ -94,7 +103,7 @@ fn show_now(app: &AppHandle, payload: NoticePayload) -> bool {
     let is_toast = matches!(payload, NoticePayload::Toast { .. });
     let (w, h) = match payload {
         NoticePayload::Toast { .. } => TOAST_SIZE,
-        NoticePayload::Nudge { .. } => CARD_SIZE,
+        NoticePayload::Nudge { .. } | NoticePayload::CrashPrompt { .. } => CARD_SIZE,
         NoticePayload::Updated { .. } => UPDATED_SIZE,
     };
     let _ = win.set_size(LogicalSize::new(w, h));
@@ -247,6 +256,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&payload).unwrap(),
             serde_json::json!({"kind": "updated", "version": "0.2.0", "hasNotes": true, "setCleared": false})
+        );
+        assert_eq!(
+            serde_json::to_value(NoticePayload::CrashPrompt { count: 2 }).unwrap(),
+            serde_json::json!({"kind": "crashPrompt", "count": 2})
         );
     }
 

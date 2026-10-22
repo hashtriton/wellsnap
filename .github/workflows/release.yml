@@ -153,14 +153,70 @@ jobs:
           export_if_set TAURI_SIGNING_PRIVATE_KEY
           export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
+      # Crash reports and anonymous statistics (src-tauri/src/telemetry): release builds compile the feature in
+      # and get the ingest keys at build time (option_env!). Without WELLSNAP_SENTRY_DSN and WELLSNAP_POSTHOG_KEY
+      # the release sends nothing; an empty WELLSNAP_POSTHOG_HOST means https://us.i.posthog.com.
+      # With SENTRY_AUTH_TOKEN the build also keeps line tables in a PDB / dSYM next to the binary (the exe
+      # itself does not grow) and uploads them to Sentry after the build. SENTRY_ORG and SENTRY_PROJECT default
+      # to the WellSnap project; set the repository variable SENTRY_URL if the token does not name its region.
+      - name: Configure telemetry
+        id: telemetry
+        env:
+          WELLSNAP_SENTRY_DSN: ${{ secrets.WELLSNAP_SENTRY_DSN }}
+          WELLSNAP_POSTHOG_KEY: ${{ secrets.WELLSNAP_POSTHOG_KEY }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'wellsnap-zw' }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || 'wellsnap' }}
+        shell: bash
+        run: |
+          export_if_set() {
+            if [ -n "${!1}" ]; then
+              { echo "$1<<WELLSNAP_ENV_EOF"; printf '%s\n' "${!1}"; echo "WELLSNAP_ENV_EOF"; } >> "$GITHUB_ENV"
+            fi
+          }
+          if [ -z "$WELLSNAP_SENTRY_DSN" ] || [ -z "$WELLSNAP_POSTHOG_KEY" ]; then
+            echo "::warning::WELLSNAP_SENTRY_DSN or WELLSNAP_POSTHOG_KEY is not set: this release sends no crash reports and no statistics"
+          fi
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            export_if_set SENTRY_AUTH_TOKEN
+            export_if_set SENTRY_URL
+            export_if_set SENTRY_ORG
+            export_if_set SENTRY_PROJECT
+            echo "CARGO_PROFILE_RELEASE_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+            echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed" >> "$GITHUB_ENV"
+            echo "symbols=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::SENTRY_AUTH_TOKEN is not set: no debug symbols are uploaded, crash stacks stay unsymbolicated"
+          fi
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WELLSNAP_SENTRY_DSN: ${{ secrets.WELLSNAP_SENTRY_DSN }}
+          WELLSNAP_POSTHOG_KEY: ${{ secrets.WELLSNAP_POSTHOG_KEY }}
+          WELLSNAP_POSTHOG_HOST: ${{ secrets.WELLSNAP_POSTHOG_HOST }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: WellSnap ${{ github.ref_name }}
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }} ${{ steps.apple.outputs.extra_args }}
+          args: ${{ matrix.args }} --features telemetry ${{ steps.apple.outputs.extra_args }}
           uploadUpdaterJson: ${{ steps.apple.outputs.adhoc != 'true' }}
+
+      # The cargo binary is `wellsnap` (the bundle renames it to WellSnap): its PDB on Windows, one dSYM per
+      # architecture of the universal macOS build.
+      - name: Upload debug symbols to Sentry
+        if: steps.telemetry.outputs.symbols == 'true'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            files=(src-tauri/target/aarch64-apple-darwin/release/wellsnap.dSYM src-tauri/target/x86_64-apple-darwin/release/wellsnap.dSYM)
+          else
+            files=(src-tauri/target/release/wellsnap.pdb src-tauri/target/release/wellsnap.exe)
+          fi
+          npx --yes @sentry/cli@3.8.2 releases new "wellsnap@$version"
+          npx --yes @sentry/cli@3.8.2 debug-files upload --include-sources "${files[@]}"
+          npx --yes @sentry/cli@3.8.2 releases finalize "wellsnap@$version"

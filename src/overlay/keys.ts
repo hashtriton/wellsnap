@@ -104,16 +104,36 @@ export function isRepeatable(cmd: CommandId): boolean {
   return REPEATABLE.has(cmd);
 }
 
-export function matchKey(e: KeyInput, mac: boolean): CommandId | null {
+function chordMatches(c: Chord, e: KeyInput, mac: boolean): boolean {
+  if (mac ? e.ctrlKey : e.metaKey) return false;
   const mod = mac ? e.metaKey : e.ctrlKey;
-  if (mac ? e.ctrlKey : e.metaKey) return null;
-  const code = codeOf(e);
+  return c.code === codeOf(e) && !!c.mod === mod && !!c.shift === e.shiftKey && !!c.alt === e.altKey;
+}
+
+export function matchKey(e: KeyInput, mac: boolean): CommandId | null {
   for (const binding of KEYMAP) {
     for (const c of binding.chords) {
-      if (c.code === code && !!c.mod === mod && !!c.shift === e.shiftKey && !!c.alt === e.altKey) return binding.id;
+      if (chordMatches(c, e, mac)) return binding.id;
     }
   }
   return null;
+}
+
+/** Lightshot's upload (Ctrl+D), online editor (Ctrl+E) and close (Ctrl+X) keys, for users who come from it. */
+export type HabitId = "upload" | "editOnline" | "close";
+
+/**
+ * Kept out of KEYMAP so the F1 panel and the tooltips do not list them; checked only when `matchKey` finds
+ * nothing. WellSnap uploads nothing, so "upload" copies and explains, "editOnline" points to the tools here.
+ */
+export const HABITS: readonly { id: HabitId; chord: Chord }[] = [
+  { id: "upload", chord: { code: "KeyD", mod: true } },
+  { id: "editOnline", chord: { code: "KeyE", mod: true } },
+  { id: "close", chord: { code: "KeyX", mod: true } },
+];
+
+export function matchHabit(e: KeyInput, mac: boolean): HabitId | null {
+  return HABITS.find((h) => chordMatches(h.chord, e, mac))?.id ?? null;
 }
 
 export interface InputKeyEvent extends KeyInput {

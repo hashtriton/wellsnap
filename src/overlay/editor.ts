@@ -1,7 +1,7 @@
 // Interaction controller of the overlay: owns the frozen frame, the crop selection, the annotations and
 // their history, renders the canvas on demand (one rAF per change) and publishes a View for the React UI.
 import type { Params } from "../shared/i18n";
-import { api, type CommentPlacement, type FinishAction, type ImageFormat, type PreparePayload, type Settings } from "../shared/ipc";
+import { api, type CommentPlacement, type FinishAction, type FinishHint, type ImageFormat, type PreparePayload, type Settings } from "../shared/ipc";
 import { annotationHandles, bounds, dragHandle, hitAnnotationHandle, topCallout, topHit, translate, type AnnHandle } from "./annotations";
 import { exportImage, finishMeta } from "./export";
 import { drawFrame } from "./frame";
@@ -24,7 +24,7 @@ import {
   type Handle,
 } from "./geometry";
 import { History } from "./history";
-import { arrowDelta, escapeStep, isRepeatable, matchKey, type CommandId } from "./keys";
+import { arrowDelta, escapeStep, formatChord, isRepeatable, matchHabit, matchKey, shortcutOf, type CommandId, type HabitId } from "./keys";
 import { calloutOf, calloutsOf, MAX_MARKS, markInCrop, markLabel, nextMarkNum, removeAnnotation, setCaption } from "./marks";
 import { computeMosaic, mosaicCellSize, type PixelSource } from "./mosaic";
 import { defaultPrefs, parsePrefs, serializePrefs, SIZED_TOOLS, stepWidth, type ToolPrefs } from "./prefs";
@@ -1611,7 +1611,7 @@ export class Editor {
     api.overlayCancel().catch(() => {});
   }
 
-  async finish(action: FinishAction): Promise<void> {
+  async finish(action: FinishAction, hint?: FinishHint): Promise<void> {
     const payload = this.payload;
     const crop = this.selection;
     if (this.busy || this.phase !== "ready" || !payload || !crop) return;
@@ -1646,7 +1646,7 @@ export class Editor {
       exported = true;
       await api.overlayFinish(
         result.bytes,
-        finishMeta({ captureId: payload.captureId, action, letter, format, placement, annotations: list, crop, image: result, scale: this.scale }),
+        finishMeta({ captureId: payload.captureId, action, letter, format, placement, annotations: list, crop, image: result, scale: this.scale, hint }),
       );
     } catch (err) {
       // On success the core hides and resets the overlay. On failure it leaves it open with the selection,
@@ -1680,7 +1680,13 @@ export class Editor {
     if (target instanceof HTMLButtonElement && ["Enter", "NumpadEnter", "Space"].includes(e.code)) return;
     if (e.code !== "Tab") e.preventDefault();
     const cmd = matchKey(e, isMac);
-    if (!cmd || this.busy) return;
+    if (this.busy) return;
+    if (!cmd) {
+      const habit = matchHabit(e, isMac);
+      // One-shot like Esc and copy: a held Ctrl+X must not walk on to discarding the snapshot.
+      if (habit && !e.repeat) this.runHabit(habit);
+      return;
+    }
     // A held key must not walk through one-shot commands: held Esc would discard, held Enter would finish.
     if (e.repeat && !isRepeatable(cmd)) return;
     this.run(cmd, e.code);
@@ -1772,6 +1778,29 @@ export class Editor {
     }
     this.emit();
     this.requestRender();
+  }
+
+  /** Lightshot's keys: nothing is uploaded, so "upload" copies (the toast says why) and the others explain or close. */
+  private runHabit(habit: HabitId): void {
+    if (habit === "close") {
+      this.escape();
+      return;
+    }
+    this.armed = false;
+    if (habit === "upload" && this.phase === "ready") {
+      void this.finish("copy", "noUpload");
+      return;
+    }
+    const notice: Notice =
+      habit === "upload"
+        ? {
+            key: "overlay.notices.noUpload",
+            params: { copy: shortcutOf("copy", isMac), paste: formatChord({ code: "KeyV", mod: true }, isMac) },
+            tone: "info",
+          }
+        : { key: "overlay.notices.editHere", tone: "info" };
+    this.showNotice(notice, 6000);
+    this.emit();
   }
 
   private escape(): void {

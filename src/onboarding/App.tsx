@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
-import { api, type AppInfo, type Platform, type PrintScreenStatus, type Settings } from "../shared/ipc";
+import { api, type AppInfo, type HotkeyStatus, type Platform, type Settings } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
+import { ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
+import { alternativeKey, blockedText, captureAdvice } from "../shared/ui/conflicts";
 import { Button, Keys, Notice, Row, Switch } from "../shared/ui/controls";
 import { useAppInfo, useSettings, type SettingsPatch } from "../shared/ui/hooks";
 import { defaultHotkeys, formatAccelerator, guessPlatform } from "../shared/ui/hotkey";
@@ -69,7 +71,7 @@ export function App() {
         {step === 1 && (
           <Setup t={t} platform={platform} settings={settings} update={update} info={info} refresh={refresh} headingRef={headingRef} />
         )}
-        {step === 2 && <TryIt t={t} platform={platform} hotkey={hotkey} headingRef={headingRef} />}
+        {step === 2 && <TryIt t={t} platform={platform} hotkey={hotkey} status={info?.hotkeys} headingRef={headingRef} />}
       </main>
 
       <footer className="onb-foot">
@@ -158,6 +160,7 @@ function Setup({
       <p className="onb-lead">{t("onboarding.setup.lead")}</p>
       <div className="onb-stack">
         {mac ? <MacPermissions t={t} info={info} refresh={refresh} /> : <PrintScreenCard t={t} />}
+        {!mac && <SetupConflicts t={t} platform={platform} settings={settings} status={info?.hotkeys} update={update} refresh={refresh} />}
         {settings && (
           <div className="card onb-row-card">
             <Row label={mac ? t("onboarding.setup.autostartMac") : t("onboarding.setup.autostart")} description={t("onboarding.setup.autostartDesc")}>
@@ -179,6 +182,65 @@ function Setup({
         </div>
       </div>
     </section>
+  );
+}
+
+/** Windows: another screenshot tool holding the capture key, with its steps, "Check again" and a free key. */
+function SetupConflicts({
+  t,
+  platform,
+  settings,
+  status,
+  update,
+  refresh,
+}: {
+  t: TFunction;
+  platform: Platform;
+  settings: Settings | null;
+  status: HotkeyStatus | undefined;
+  update: (patch: SettingsPatch) => Promise<boolean>;
+  refresh: () => void;
+}) {
+  const defaults = defaultHotkeys(platform);
+  const hotkey = settings?.captureHotkey ?? defaults.capture;
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const conflicts = useConflicts(platform, hotkey);
+  const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
+  const recheck = async () => {
+    try {
+      await api.hotkeysRecheck();
+    } catch {
+      // The card follows the status the core publishes, which also rescans the conflicts.
+    }
+    refresh();
+  };
+  const switchTo = async (captureHotkey: string) => {
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      setSaveFailed(!(await update({ captureHotkey })));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <ConflictCard
+        t={t}
+        platform={platform}
+        hotkey={hotkey}
+        advice={advice}
+        printScreen={conflicts.printScreen}
+        fix={{
+          alternative: alternativeKey(advice, conflicts.report, [hotkey, settings?.smartPasteHotkey ?? defaults.smartPaste], platform),
+          busy: saving,
+          onRecheck: recheck,
+          onUseAlternative: (accelerator) => void switchTo(accelerator),
+        }}
+      />
+      {saveFailed && <Notice tone="error">{t("settings.hotkeys.saveFailed")}</Notice>}
+    </>
   );
 }
 
@@ -258,23 +320,24 @@ function Status({ ok, t }: { ok: boolean; t: TFunction }) {
   );
 }
 
-function TryIt({ t, platform, hotkey, headingRef }: { t: TFunction; platform: Platform; hotkey: string; headingRef: HeadingRef }) {
+function TryIt({
+  t,
+  platform,
+  hotkey,
+  status,
+  headingRef,
+}: {
+  t: TFunction;
+  platform: Platform;
+  hotkey: string;
+  status: HotkeyStatus | undefined;
+  headingRef: HeadingRef;
+}) {
   const [busy, setBusy] = useState(false);
-  const [printScreen, setPrintScreen] = useState<PrintScreenStatus | null>(null);
-  useEffect(() => {
-    if (platform !== "windows") return;
-    const refresh = () => {
-      api
-        .printScreenStatus()
-        .then(setPrintScreen)
-        .catch(() => undefined);
-    };
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [platform]);
-  // Windows 11 still gives Print Screen to Snipping Tool: "Press PrtSc" would open the wrong app.
-  const snipping = hotkey.trim().toLowerCase() === "printscreen" && printScreen?.applicable && printScreen.snippingEnabled;
+  const conflicts = useConflicts(platform, hotkey);
+  const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
+  // "Press PrtSc" would open another app or nothing at all: say why and offer the button instead.
+  const blocked = blockedText(advice, formatAccelerator(hotkey, platform), t);
   const capture = async () => {
     setBusy(true);
     try {
@@ -296,9 +359,9 @@ function TryIt({ t, platform, hotkey, headingRef }: { t: TFunction; platform: Pl
       <h1 ref={headingRef} tabIndex={-1}>
         {t("onboarding.tryIt.title")}
       </h1>
-      {snipping ? (
+      {blocked ? (
         <div className="onb-snipping">
-          <Notice tone="info">{t("onboarding.tryIt.snipping", { hotkey: formatAccelerator(hotkey, platform) })}</Notice>
+          <Notice tone="info">{blocked}</Notice>
         </div>
       ) : (
         <>

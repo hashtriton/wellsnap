@@ -706,3 +706,83 @@ describe("annotation handles", () => {
     expect(editor.getView().notice).toEqual({ key: "overlay.notices.marksOut", params: { count: 1 }, tone: "info" });
   });
 });
+
+describe("Lightshot habits", () => {
+  const ctrl = (code: string, repeat = false) => key(code, repeat, code, { ctrlKey: true });
+  const finishMetaOf = (call = 0) => (api.overlayFinish.mock.calls[call] as unknown[])[1] as { action: string; hint?: string };
+
+  it("copies on Ctrl+D with a ready selection and tells the core there is no upload", async () => {
+    withAnnotation();
+    ctrl("KeyD");
+    expect(editor.getView().busy).toBe("copy");
+    await vi.waitFor(() => expect(api.overlayFinish).toHaveBeenCalledTimes(1));
+    expect(finishMetaOf()).toMatchObject({ action: "copy", hint: "noUpload" });
+  });
+
+  it("does not send the hint with a plain Ctrl+C", async () => {
+    withAnnotation();
+    ctrl("KeyC");
+    await vi.waitFor(() => expect(api.overlayFinish).toHaveBeenCalledTimes(1));
+    expect(finishMetaOf().hint).toBeUndefined();
+  });
+
+  it("explains on Ctrl+D before anything is selected", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    ctrl("KeyD");
+    expect(api.overlayFinish).not.toHaveBeenCalled();
+    expect(editor.getView().notice).toEqual({
+      key: "overlay.notices.noUpload",
+      params: { copy: "Ctrl+C", paste: "Ctrl+V" },
+      tone: "info",
+    });
+  });
+
+  it("points to the editing keys on Ctrl+E", () => {
+    withAnnotation();
+    ctrl("KeyE");
+    expect(editor.getView().notice).toEqual({ key: "overlay.notices.editHere", tone: "info" });
+    expect(editor.getView().phase).toBe("ready");
+    expect(api.overlayFinish).not.toHaveBeenCalled();
+  });
+
+  it("shows the same notice on Ctrl+E before anything is selected", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    ctrl("KeyE");
+    expect(editor.getView().notice).toEqual({ key: "overlay.notices.editHere", tone: "info" });
+    expect(editor.getView().phase).toBe("idle");
+    expect(api.overlayFinish).not.toHaveBeenCalled();
+    expect(api.overlayCancel).not.toHaveBeenCalled();
+  });
+
+  it("closes on Ctrl+X with the same layers and second press as Esc", () => {
+    withAnnotation();
+    ctrl("KeyX");
+    expect(editor.getView().tool).toBe("select");
+    ctrl("KeyX");
+    expect(editor.getView().armed).toBe(true);
+    expect(api.overlayCancel).not.toHaveBeenCalled();
+    ctrl("KeyX", true);
+    expect(api.overlayCancel).not.toHaveBeenCalled();
+    ctrl("KeyX");
+    expect(api.overlayCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an empty overlay on Ctrl+X at once", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    ctrl("KeyX");
+    expect(api.overlayCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a held Ctrl+D and any habit while finishing", async () => {
+    withAnnotation();
+    ctrl("KeyD", true);
+    expect(editor.getView().busy).toBeNull();
+    ctrl("KeyS");
+    expect(editor.getView().busy).toBe("save");
+    ctrl("KeyX");
+    ctrl("KeyD");
+    expect(api.overlayCancel).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(api.overlayFinish).toHaveBeenCalledTimes(1));
+    expect(finishMetaOf()).toMatchObject({ action: "save" });
+  });
+});

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   escapeStep,
   formatBinding,
+  HABITS,
   inputKeyAction,
   isRepeatable,
   KEYMAP,
+  matchHabit,
   matchKey,
   shortcutOf,
   type EscContext,
@@ -88,6 +90,47 @@ describe("matchKey", () => {
         seen.add(id);
       }
     }
+  });
+});
+
+describe("Lightshot habits", () => {
+  it("maps Ctrl+D, Ctrl+E and Ctrl+X on any layout", () => {
+    expect(matchHabit(key("KeyD", { ctrlKey: true }, "в"), false)).toBe("upload");
+    expect(matchHabit(key("KeyE", { ctrlKey: true }, "у"), false)).toBe("editOnline");
+    expect(matchHabit(key("KeyX", { ctrlKey: true }, "ч"), false)).toBe("close");
+    expect(matchHabit(key("", { ctrlKey: true }, "d"), false)).toBe("upload");
+  });
+
+  it("uses Cmd on macOS and ignores Ctrl there", () => {
+    expect(matchHabit(key("KeyD", { metaKey: true }), true)).toBe("upload");
+    expect(matchHabit(key("KeyE", { metaKey: true }), true)).toBe("editOnline");
+    expect(matchHabit(key("KeyX", { metaKey: true }), true)).toBe("close");
+    expect(matchHabit(key("KeyD", { ctrlKey: true }), true)).toBeNull();
+    expect(matchHabit(key("KeyD", { metaKey: true }), false)).toBeNull();
+  });
+
+  it("needs exactly the modifier: plain or shifted letters stay free", () => {
+    expect(matchHabit(key("KeyD"), false)).toBeNull();
+    expect(matchHabit(key("KeyE"), false)).toBeNull();
+    expect(matchHabit(key("KeyX"), false)).toBeNull();
+    expect(matchHabit(key("KeyD", { ctrlKey: true, shiftKey: true }), false)).toBeNull();
+    expect(matchHabit(key("KeyX", { ctrlKey: true, altKey: true }), false)).toBeNull();
+    expect(matchHabit(key("KeyC", { ctrlKey: true }), false)).toBeNull();
+  });
+
+  it("never shadows a KEYMAP chord, and matchKey leaves them alone", () => {
+    const chords = new Set(KEYMAP.flatMap((b) => b.chords.map((c) => `${c.code}|${!!c.mod}|${!!c.shift}|${!!c.alt}`)));
+    for (const h of HABITS) {
+      const c = h.chord;
+      expect(chords.has(`${c.code}|${!!c.mod}|${!!c.shift}|${!!c.alt}`), h.id).toBe(false);
+      for (const mac of [false, true]) {
+        const press = key(c.code, mac ? { metaKey: true } : { ctrlKey: true });
+        expect(matchKey(press, mac), h.id).toBeNull();
+        expect(matchHabit(press, mac)).toBe(h.id);
+      }
+    }
+    expect(matchKey(key("KeyD"), false)).toBeNull();
+    expect(matchKey(key("KeyE"), false)).toBeNull();
   });
 });
 

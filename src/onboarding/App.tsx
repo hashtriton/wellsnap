@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
-import { api, type AppInfo, type HotkeyStatus, type Platform, type Settings } from "../shared/ipc";
+import { api, type AppInfo, type CrashMode, type HotkeyStatus, type Platform, type Settings } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
 import { ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
 import { alternativeKey, blockedText, captureAdvice } from "../shared/ui/conflicts";
@@ -159,6 +159,7 @@ function Setup({
       </h1>
       <p className="onb-lead">{t("onboarding.setup.lead")}</p>
       <div className="onb-stack">
+        {settings && info?.telemetry && <TelemetryCard t={t} settings={settings} update={update} />}
         {mac ? <MacPermissions t={t} info={info} refresh={refresh} /> : <PrintScreenCard t={t} />}
         {!mac && <SetupConflicts t={t} platform={platform} settings={settings} status={info?.hotkeys} update={update} refresh={refresh} />}
         {settings && (
@@ -241,6 +242,55 @@ function SetupConflicts({
       />
       {saveFailed && <Notice tone="error">{t("settings.hotkeys.saveFailed")}</Notice>}
     </>
+  );
+}
+
+/**
+ * Crash reports and statistics are on by default; nothing is sent before onboarding closes, so this card is where
+ * every user sees both switches first: it comes first and stays compact, so both fit above the fold of the 640x520
+ * window. The crash switch turns "never" on and off; on again, it brings back the mode that was on before ("always",
+ * or "ask" chosen in Settings).
+ */
+function TelemetryCard({
+  t,
+  settings,
+  update,
+}: {
+  t: TFunction;
+  settings: Settings;
+  update: (patch: SettingsPatch) => Promise<boolean>;
+}) {
+  const lastOn = useRef<CrashMode>("always");
+  useEffect(() => {
+    if (settings.crashReports !== "never") lastOn.current = settings.crashReports;
+  }, [settings.crashReports]);
+  return (
+    <div className="card onb-telemetry">
+      <div className="card-head">
+        <span className="card-icon">
+          <Icon name="shield" />
+        </span>
+        <h3 className="card-title">{t("onboarding.setup.telemetryTitle")}</h3>
+        <button type="button" className="link-btn" onClick={() => api.openSettings("privacy").catch(() => undefined)}>
+          {t("onboarding.setup.telemetryDetails")}
+        </button>
+      </div>
+      <p className="card-text">{t("onboarding.setup.telemetryText")}</p>
+      <Row label={t("onboarding.setup.telemetryCrash")}>
+        {({ labelId }) => (
+          <Switch
+            labelledBy={labelId}
+            checked={settings.crashReports !== "never"}
+            onChange={(on) => update({ crashReports: on ? lastOn.current : "never" })}
+          />
+        )}
+      </Row>
+      <Row label={t("onboarding.setup.telemetryStats")}>
+        {({ labelId }) => (
+          <Switch labelledBy={labelId} checked={settings.usageStats} onChange={(usageStats) => update({ usageStats })} />
+        )}
+      </Row>
+    </div>
   );
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createT } from "../shared/i18n";
-import { fileName, nudgeCopy, toastDetail } from "./copy";
+import { crashCopy, fileName, nudgeCopy, toastDetail } from "./copy";
 
 describe("nudgeCopy", () => {
   const ru = createT("ru");
@@ -38,6 +38,18 @@ describe("nudgeCopy", () => {
         const { title, body } = nudgeCopy(t, i, 300);
         expect(`${title} ${body}`).not.toMatch(/[{}\u2012\u2013\u2014]|notice\./);
       }
+    }
+  });
+});
+
+describe("crashCopy", () => {
+  it("has the prompt and its four buttons in both languages", () => {
+    expect(crashCopy(createT("ru")).title).toBe("WellSnap неожиданно закрылся");
+    expect(crashCopy(createT("en")).always).toBe("Always send without asking");
+    for (const lang of ["ru", "en"] as const) {
+      const texts = Object.values(crashCopy(createT(lang)));
+      expect(texts).toHaveLength(6);
+      for (const text of texts) expect(text).not.toMatch(/[{}]|notice\./);
     }
   });
 });

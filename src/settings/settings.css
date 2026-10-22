@@ -551,6 +551,78 @@ body {
   color: var(--text-2);
 }
 
+/* Privacy. The three crash modes wrap inside their control when the window is too narrow for them. */
+.row-control:has(> .privacy-mode) {
+  flex-shrink: 1;
+  max-width: 100%;
+}
+.privacy-mode {
+  max-width: 100%;
+}
+.privacy-mode .seg {
+  flex-wrap: wrap;
+}
+.privacy-detail {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.privacy-sent {
+  margin-bottom: 16px;
+}
+.privacy-sent .privacy-detail {
+  margin: 8px 0 0;
+}
+.sent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  list-style: none;
+  font-size: 12.5px;
+}
+.sent-list summary {
+  cursor: pointer;
+}
+.sent-list summary,
+.sent-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sent-time {
+  margin-right: 8px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.sent-summary {
+  margin-left: 8px;
+  color: var(--text-2);
+}
+.sent-list pre {
+  max-height: 220px;
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.privacy-where {
+  margin-top: 20px;
+}
+
 @media (max-width: 700px) {
   .settings {
     grid-template-columns: 176px 1fr;

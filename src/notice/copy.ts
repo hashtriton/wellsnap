@@ -12,6 +12,18 @@ export function nudgeCopy(t: TFunction, index: number, captures: number): { titl
   };
 }
 
+/** The crash prompt after a crash in "ask" mode (analytics plan 3.4). */
+export function crashCopy(t: TFunction) {
+  return {
+    title: t("notice.crash.title"),
+    body: t("notice.crash.body"),
+    send: t("notice.crash.send"),
+    dontSend: t("notice.crash.dontSend"),
+    always: t("notice.crash.always"),
+    details: t("notice.crash.details"),
+  };
+}
+
 export function fileName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const last = trimmed.split(/[\\/]/).pop();

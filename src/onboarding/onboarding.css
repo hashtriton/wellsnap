@@ -161,6 +161,13 @@ body {
 .card-head .pill {
   margin-left: auto;
 }
+/* Telemetry consent: first on the Setup step and compact, so both switches show without scrolling. */
+.onb-telemetry .card-head .link-btn {
+  margin-left: auto;
+}
+.onb-telemetry .row {
+  padding: 8px 0;
+}
 .card-note {
   margin: 10px 0 0;
   font-size: 12px;

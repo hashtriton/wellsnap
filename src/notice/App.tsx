@@ -1,14 +1,22 @@
-// Notice window: click-through toasts ("Copied"), the rare donation reminder card and the "updated" pill.
+// Notice window: click-through toasts ("Copied"), the rare donation reminder card, the "updated" pill and the crash
+// prompt.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
-import { api, events, type Lang, type NoticePayload, type PromptOutcome } from "../shared/ipc";
+import { api, events, type CrashAnswer, type Lang, type NoticePayload, type PromptOutcome } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
 import { hasPaymentMethods, RELEASES_URL, supportTarget } from "../shared/donate";
 import { Button } from "../shared/ui/controls";
 import { Icon } from "../shared/ui/icons";
-import { nudgeCopy, toastDetail } from "./copy";
-import { AutoHide, NUDGE_AUTO_HIDE_MS, outcomeOnHide, remainingAfterPause, UPDATED_AUTO_HIDE_MS } from "./nudge";
+import { crashCopy, nudgeCopy, toastDetail } from "./copy";
+import {
+  AutoHide,
+  CRASH_AUTO_HIDE_MS,
+  NUDGE_AUTO_HIDE_MS,
+  outcomeOnHide,
+  remainingAfterPause,
+  UPDATED_AUTO_HIDE_MS,
+} from "./nudge";
 
 type Shown = { id: number; payload: NoticePayload };
 type ClickOutcome = Exclude<PromptOutcome, "notSeen">;
@@ -110,6 +118,7 @@ export function App() {
           onClose={closeNotice}
         />
       )}
+      {payload?.kind === "crashPrompt" && <CrashCard key={shown!.id} t={t} onClose={closeNotice} />}
     </div>
   );
 }
@@ -324,6 +333,76 @@ function NudgeCard({
           </button>
           <button type="button" className="link-btn" onClick={() => onOutcome("never")}>
             {t("notice.never")}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * After a crash in "ask" mode. Hides itself after 20 s unless hovered or focused; Esc, "Details" and the timeout
+ * leave the reports waiting without an answer.
+ */
+function CrashCard({ t, onClose }: { t: TFunction; onClose: () => void }) {
+  const copy = crashCopy(t);
+  const timer = useRef<AutoHide | null>(null);
+  useEffect(() => {
+    const autoHide = new AutoHide(CRASH_AUTO_HIDE_MS, onClose);
+    timer.current = autoHide;
+    autoHide.start();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      autoHide.stop();
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+  const hold = (key: "hovered" | "focused", on: boolean) => timer.current?.hold(key, on);
+
+  const answer = (choice: Exclude<CrashAnswer, "delete">) => {
+    api.crashPromptAnswer(choice).catch(() => undefined);
+    onClose();
+  };
+  const details = () => {
+    onClose();
+    api.openSettings("privacy").catch(() => undefined);
+  };
+
+  return (
+    <section
+      className="nudge"
+      aria-labelledby="crash-title"
+      aria-describedby="crash-body"
+      onMouseEnter={() => hold("hovered", true)}
+      onMouseLeave={() => hold("hovered", false)}
+      onFocus={() => hold("focused", true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) hold("focused", false);
+      }}
+    >
+      <header className="nudge-head">
+        <AppMark size={22} />
+        <h1 id="crash-title">{copy.title}</h1>
+      </header>
+      <p id="crash-body" className="nudge-body">
+        {copy.body}
+      </p>
+      <div className="crash-actions">
+        <div className="nudge-buttons">
+          <Button variant="primary" onClick={() => answer("send")}>
+            {copy.send}
+          </Button>
+          <Button onClick={() => answer("dontSend")}>{copy.dontSend}</Button>
+        </div>
+        <div className="crash-links">
+          <button type="button" className="link-btn" onClick={() => answer("always")}>
+            {copy.always}
+          </button>
+          <button type="button" className="link-btn" onClick={details}>
+            {copy.details}
           </button>
         </div>
       </div>

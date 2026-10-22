@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
-import { api, type AppInfo, type Platform, type PrintScreenStatus, type Settings } from "../shared/ipc";
+import { api, type AppInfo, type HotkeyStatus, type Platform, type Settings } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
+import { ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
+import { blockedText, captureAdvice } from "../shared/ui/conflicts";
 import { Button, Keys, Notice, Row, Switch } from "../shared/ui/controls";
 import { useAppInfo, useSettings, type SettingsPatch } from "../shared/ui/hooks";
 import { defaultHotkeys, formatAccelerator, guessPlatform } from "../shared/ui/hotkey";
@@ -67,9 +69,18 @@ export function App() {
       <main className="onb-body" key={step}>
         {step === 0 && <Welcome t={t} platform={platform} hotkey={hotkey} headingRef={headingRef} />}
         {step === 1 && (
-          <Setup t={t} platform={platform} settings={settings} update={update} info={info} refresh={refresh} headingRef={headingRef} />
+          <Setup
+            t={t}
+            platform={platform}
+            settings={settings}
+            update={update}
+            info={info}
+            refresh={refresh}
+            hotkey={hotkey}
+            headingRef={headingRef}
+          />
         )}
-        {step === 2 && <TryIt t={t} platform={platform} hotkey={hotkey} headingRef={headingRef} />}
+        {step === 2 && <TryIt t={t} platform={platform} hotkey={hotkey} status={info?.hotkeys} headingRef={headingRef} />}
       </main>
 
       <footer className="onb-foot">
@@ -139,6 +150,7 @@ function Setup({
   update,
   info,
   refresh,
+  hotkey,
   headingRef,
 }: {
   t: TFunction;
@@ -147,6 +159,7 @@ function Setup({
   update: (patch: SettingsPatch) => Promise<boolean>;
   info: AppInfo | null;
   refresh: () => void;
+  hotkey: string;
   headingRef: HeadingRef;
 }) {
   const mac = platform === "macos";
@@ -157,7 +170,14 @@ function Setup({
       </h1>
       <p className="onb-lead">{t("onboarding.setup.lead")}</p>
       <div className="onb-stack">
-        {mac ? <MacPermissions t={t} info={info} refresh={refresh} /> : <PrintScreenCard t={t} />}
+        {mac ? (
+          <MacPermissions t={t} info={info} refresh={refresh} />
+        ) : (
+          <>
+            <PrintScreenCard t={t} />
+            <SetupConflicts t={t} platform={platform} hotkey={hotkey} status={info?.hotkeys} update={update} refresh={refresh} />
+          </>
+        )}
         {settings && (
           <div className="card onb-row-card">
             <Row label={mac ? t("onboarding.setup.autostartMac") : t("onboarding.setup.autostart")} description={t("onboarding.setup.autostartDesc")}>
@@ -179,6 +199,48 @@ function Setup({
         </div>
       </div>
     </section>
+  );
+}
+
+/** Windows: another screenshot tool holding the capture key, with its steps, "Check again" and a free key. */
+function SetupConflicts({
+  t,
+  platform,
+  hotkey,
+  status,
+  update,
+  refresh,
+}: {
+  t: TFunction;
+  platform: Platform;
+  hotkey: string;
+  status: HotkeyStatus | undefined;
+  update: (patch: SettingsPatch) => Promise<boolean>;
+  refresh: () => void;
+}) {
+  const conflicts = useConflicts(platform, `${hotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
+  const recheck = async () => {
+    try {
+      await api.hotkeysRecheck();
+    } catch {
+      // The card follows the status the core publishes.
+    }
+    refresh();
+    conflicts.refresh();
+  };
+  return (
+    <ConflictCard
+      t={t}
+      platform={platform}
+      hotkey={hotkey}
+      advice={advice}
+      report={conflicts.report}
+      printScreen={conflicts.printScreen}
+      withFix
+      onRecheck={recheck}
+      onUseAlternative={(captureHotkey) => void update({ captureHotkey })}
+    />
   );
 }
 
@@ -258,23 +320,24 @@ function Status({ ok, t }: { ok: boolean; t: TFunction }) {
   );
 }
 
-function TryIt({ t, platform, hotkey, headingRef }: { t: TFunction; platform: Platform; hotkey: string; headingRef: HeadingRef }) {
+function TryIt({
+  t,
+  platform,
+  hotkey,
+  status,
+  headingRef,
+}: {
+  t: TFunction;
+  platform: Platform;
+  hotkey: string;
+  status: HotkeyStatus | undefined;
+  headingRef: HeadingRef;
+}) {
   const [busy, setBusy] = useState(false);
-  const [printScreen, setPrintScreen] = useState<PrintScreenStatus | null>(null);
-  useEffect(() => {
-    if (platform !== "windows") return;
-    const refresh = () => {
-      api
-        .printScreenStatus()
-        .then(setPrintScreen)
-        .catch(() => undefined);
-    };
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [platform]);
-  // Windows 11 still gives Print Screen to Snipping Tool: "Press PrtSc" would open the wrong app.
-  const snipping = hotkey.trim().toLowerCase() === "printscreen" && printScreen?.applicable && printScreen.snippingEnabled;
+  const conflicts = useConflicts(platform, `${hotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
+  // "Press PrtSc" would open another app or nothing at all: say why and offer the button instead.
+  const blocked = blockedText(advice, formatAccelerator(hotkey, platform), t);
   const capture = async () => {
     setBusy(true);
     try {
@@ -296,9 +359,9 @@ function TryIt({ t, platform, hotkey, headingRef }: { t: TFunction; platform: Pl
       <h1 ref={headingRef} tabIndex={-1}>
         {t("onboarding.tryIt.title")}
       </h1>
-      {snipping ? (
+      {blocked ? (
         <div className="onb-snipping">
-          <Notice tone="info">{t("onboarding.tryIt.snipping", { hotkey: formatAccelerator(hotkey, platform) })}</Notice>
+          <Notice tone="info">{blocked}</Notice>
         </div>
       ) : (
         <>

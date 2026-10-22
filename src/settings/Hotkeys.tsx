@@ -1,18 +1,57 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Platform } from "../shared/ipc";
 import { api } from "../shared/ipc";
 import type { TFunction } from "../shared/i18n";
+import { CaptureFix, ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
+import { alternativeKey, captureAdvice, fixSteps, isTaken, suspectsOf, takenText } from "../shared/ui/conflicts";
 import { Button, Notice, Row } from "../shared/ui/controls";
 import { defaultHotkeys, formatAccelerator, sameAccelerator } from "../shared/ui/hotkey";
+import { Icon } from "../shared/ui/icons";
 import { PrintScreenCard } from "../shared/ui/PrintScreenCard";
 import { PageHead } from "./General";
 import { HotkeyRecorder } from "./HotkeyRecorder";
 import { captureStatus, smartPasteStatus, type RowStatus } from "./hotkeyStatus";
+import { openLink, pasteTargetsUrl } from "./links";
 import type { PageProps } from "./types";
 
-export function Hotkeys({ t, platform, settings, info, update }: PageProps) {
+interface Fix {
+  steps: string[];
+  alternative: string | null;
+  onRecheck: () => Promise<void>;
+}
+
+export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo }: PageProps) {
   const defaults = defaultHotkeys(platform);
   const status = info?.hotkeys;
+  const [openFailed, setOpenFailed] = useState(false);
+  const conflicts = useConflicts(platform, `${settings.captureHotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const advice = captureAdvice({
+    hotkey: settings.captureHotkey,
+    status,
+    printScreen: conflicts.printScreen,
+    report: conflicts.report,
+    platform,
+  });
+
+  const recheck = async () => {
+    try {
+      await api.hotkeysRecheck();
+    } catch {
+      // The status line is re-read below either way.
+    }
+    refreshInfo();
+    conflicts.refresh();
+  };
+  // Re-registering helps whenever the key failed for any reason but WellSnap's own refusal.
+  const fix: Fix | undefined =
+    isTaken(advice) || advice?.kind === "other"
+      ? {
+          steps: fixSteps(suspectsOf(advice), null, t),
+          alternative: alternativeKey(advice, conflicts.report, settings.captureHotkey, platform),
+          onRecheck: recheck,
+        }
+      : undefined;
+
   return (
     <>
       <PageHead title={t("settings.hotkeys.title")} lead={t("settings.hotkeys.lead")} />
@@ -25,13 +64,29 @@ export function Hotkeys({ t, platform, settings, info, update }: PageProps) {
           other={{ value: settings.smartPasteHotkey, label: t("settings.hotkeys.smartPaste") }}
           offerPrintScreen={platform === "windows"}
           status={captureStatus(status)}
+          statusText={takenText(advice, formatAccelerator(settings.captureHotkey, platform), t)}
+          fix={fix}
           platform={platform}
           t={t}
           save={(captureHotkey) => update({ captureHotkey })}
         />
         <HotkeyRow
           label={t("settings.hotkeys.smartPaste")}
-          description={t("settings.hotkeys.smartPasteDesc")}
+          description={
+            <>
+              {t("settings.hotkeys.smartPasteDesc")}
+              <div>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={async () => setOpenFailed(!(await openLink(pasteTargetsUrl(lang))))}
+                >
+                  {t("settings.hotkeys.smartPasteWhere")}
+                  <Icon name="external" size={13} />
+                </button>
+              </div>
+            </>
+          }
           value={settings.smartPasteHotkey}
           fallback={defaults.smartPaste}
           other={{ value: settings.captureHotkey, label: t("settings.hotkeys.capture") }}
@@ -41,8 +96,24 @@ export function Hotkeys({ t, platform, settings, info, update }: PageProps) {
           save={(smartPasteHotkey) => update({ smartPasteHotkey })}
         />
       </section>
+      {openFailed && <Notice tone="warning">{t("settings.support.openFailed")}</Notice>}
 
-      {platform === "windows" && <PrintScreenCard t={t} />}
+      {platform === "windows" && (
+        <>
+          <PrintScreenCard t={t} />
+          <ConflictCard
+            t={t}
+            platform={platform}
+            hotkey={settings.captureHotkey}
+            advice={advice}
+            report={conflicts.report}
+            printScreen={conflicts.printScreen}
+            withFix={false}
+            onRecheck={recheck}
+            onUseAlternative={(captureHotkey) => void update({ captureHotkey })}
+          />
+        </>
+      )}
       {platform === "macos" && (
         <Notice tone="info">
           {t("settings.hotkeys.macSystem", {
@@ -65,17 +136,22 @@ function HotkeyRow({
   other,
   offerPrintScreen,
   status,
+  statusText: ownerText,
+  fix,
   platform,
   t,
   save,
 }: {
   label: string;
-  description: string;
+  description: ReactNode;
   value: string;
   fallback: string;
   other: { value: string; label: string };
   offerPrintScreen?: boolean;
   status: RowStatus;
+  /** Replaces the generic text, e.g. to name the program that holds the key. */
+  statusText?: string | null;
+  fix?: Fix;
   platform: Platform;
   t: TFunction;
   save: (accelerator: string) => Promise<boolean>;
@@ -110,7 +186,8 @@ function HotkeyRow({
   };
 
   const statusText =
-    status === "ok"
+    ownerText ??
+    (status === "ok"
       ? t("settings.hotkeys.statusOk")
       : status === "idle"
         ? t("settings.hotkeys.statusIdle")
@@ -118,7 +195,7 @@ function HotkeyRow({
           ? t("settings.hotkeys.statusTaken")
           : status === "reserved"
             ? t("settings.hotkeys.statusReserved")
-            : null;
+            : null);
 
   return (
     <Row label={label} description={description} stacked>
@@ -173,6 +250,18 @@ function HotkeyRow({
                 {statusText}
               </p>
             )
+          )}
+          {fix && (
+            <CaptureFix
+              t={t}
+              platform={platform}
+              steps={fix.steps}
+              alternative={fix.alternative}
+              busy={busy}
+              collapsed
+              onRecheck={fix.onRecheck}
+              onUseAlternative={(accelerator) => void apply(accelerator)}
+            />
           )}
         </div>
       )}

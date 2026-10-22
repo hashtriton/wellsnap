@@ -486,6 +486,8 @@ mod tests {
             ("  \n ", false),
             ("### Русский\n#### Подробнее\n", true),
             ("### Русский\n## Downloads\nWindows", false),
+            // The code signing footer that release.yml adds after the notes.
+            ("### Русский\n\n### English\n\n## Code signing policy\n\nFree code signing", false),
         ];
         for (notes, shown) in cases {
             assert_eq!(notes_have_text(notes), shown, "{notes:?}");

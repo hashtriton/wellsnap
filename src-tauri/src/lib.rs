@@ -8,6 +8,7 @@ mod donations;
 mod export;
 mod hotkeys;
 mod i18n;
+mod install_privacy;
 #[cfg(target_os = "macos")]
 mod macos;
 mod notice;
@@ -99,6 +100,8 @@ pub fn run() {
             actions::start_cache_cleanup(&handle);
 
             let state = handle.state::<AppState>();
+            // Before onboarding shows the switches and telemetry::start reads them.
+            install_privacy::take(&handle);
             let settings = state.update_settings(|s| s.donations.ensure_initialised(chrono::Utc::now().timestamp()));
             autostart::sync(&handle, &settings);
             // Startup bookkeeping (the "updated" notice) and, in release builds, the update thread.

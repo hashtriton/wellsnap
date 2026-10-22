@@ -598,7 +598,7 @@ fn set_crash_mode(app: &AppHandle, mode: CrashMode) {
     let state = app.state::<AppState>();
     let before = state.settings();
     let after = state.update_settings(|s| s.crash_reports = mode);
-    settings_changed(app, &before, &after);
+    super::settings_changed(app, &before, &after);
     let _ = app.emit("settings:changed", &after);
 }
 

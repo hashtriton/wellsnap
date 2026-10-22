@@ -25,6 +25,9 @@ pub struct PrintScreenStatus {
 
 #[cfg(windows)]
 pub use platform::{restore, status, take_over};
+/// Also used for the installer's privacy choice (install_privacy.rs), in the same key.
+#[cfg(windows)]
+pub(crate) use platform::{OUR_KEY, delete_value, read_dword, write_dword};
 
 #[cfg(not(windows))]
 pub fn status() -> PrintScreenStatus {
@@ -129,7 +132,7 @@ mod platform {
 
     const KEYBOARD_KEY: PCWSTR = w!("Control Panel\\Keyboard");
     const SNIPPING_VALUE: PCWSTR = w!("PrintScreenKeyForSnippingEnabled");
-    const OUR_KEY: PCWSTR = w!("Software\\WellSnap");
+    pub(crate) const OUR_KEY: PCWSTR = w!("Software\\WellSnap");
     const MARKER_VALUE: PCWSTR = w!("PrintScreenTakenOver");
     const PREVIOUS_VALUE: PCWSTR = w!("PrevPrintScreenKeyForSnippingEnabled");
 
@@ -219,7 +222,7 @@ mod platform {
         })
     }
 
-    fn read_dword(root: HKEY, key: PCWSTR, value: PCWSTR) -> Result<Option<u32>, String> {
+    pub(crate) fn read_dword(root: HKEY, key: PCWSTR, value: PCWSTR) -> Result<Option<u32>, String> {
         match read_value(root, key, value, RRF_RT_REG_DWORD)? {
             Some(RegData::Dword(v)) => Ok(Some(v)),
             Some(RegData::Text(_)) | None => Ok(None),
@@ -257,7 +260,7 @@ mod platform {
         }
     }
 
-    fn write_dword(root: HKEY, key: PCWSTR, value: PCWSTR, data: u32) -> Result<(), String> {
+    pub(crate) fn write_dword(root: HKEY, key: PCWSTR, value: PCWSTR, data: u32) -> Result<(), String> {
         // Creates the key when it does not exist.
         let status = unsafe {
             RegSetKeyValueW(
@@ -275,7 +278,7 @@ mod platform {
         }
     }
 
-    fn delete_value(root: HKEY, key: PCWSTR, value: PCWSTR) -> Result<(), String> {
+    pub(crate) fn delete_value(root: HKEY, key: PCWSTR, value: PCWSTR) -> Result<(), String> {
         match unsafe { RegDeleteKeyValueW(root, key, value) } {
             ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
             err => Err(format!("registry delete {}: {}", unsafe { value.display() }, win32_message(err))),

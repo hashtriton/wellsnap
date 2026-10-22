@@ -99,6 +99,9 @@ fn is_key(value: Option<&str>) -> bool {
 /// Consent side effects of a settings change (statistics off deletes the usage id and pending events,
 /// crash reports "never" empties the outbox).
 pub fn settings_changed(app: &AppHandle, before: &Settings, after: &Settings) {
+    if before.crash_reports != after.crash_reports || before.usage_stats != after.usage_stats {
+        crate::install_privacy::record(after);
+    }
     #[cfg(feature = "telemetry")]
     crash::settings_changed(app, before, after);
     #[cfg(not(feature = "telemetry"))]

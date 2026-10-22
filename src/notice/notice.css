@@ -221,9 +221,6 @@ body,
   flex-direction: column;
   gap: 6px;
 }
-.crash-actions .nudge-buttons .btn {
-  height: 32px;
-}
 .crash-links {
   display: flex;
   justify-content: space-between;

@@ -3,10 +3,16 @@
 // reports uncaught render errors through window.reportError, so they arrive here as window "error" events too.
 import { api, type JsErrorKind, type JsErrorReport } from "./ipc";
 
-/** Reports per page load; a page stuck in an error loop must not flood the outbox. */
+/**
+ * Reports per page and hour: a page stuck in an error loop must not flood the outbox, and the overlay page, which
+ * lives as long as the app, still reports new errors later. The core keeps its own daily limits.
+ */
 export const MAX_REPORTS = 5;
+export const REPORT_WINDOW_MS = 60 * 60 * 1000;
 export const MAX_MESSAGE = 500;
 export const MAX_STACK = 8192;
+/** Key names shown for a rejected plain object. */
+const MAX_KEYS = 8;
 
 export type ReportFn = (kind: JsErrorKind, value: unknown, fallbackMessage?: string) => boolean;
 
@@ -20,7 +26,8 @@ export function truncate(text: string, max: number): string {
 
 /**
  * Message and stack of anything thrown or rejected: an Error from any realm, a string (Tauri command errors) or any
- * other value.
+ * other value. Other objects and functions give only their shape: their values can be the user's comments, paths or
+ * settings, which never leave the machine.
  */
 export function describe(value: unknown, fallbackMessage = ""): { message: string; stack: string | null } {
   if (value && typeof value === "object" && typeof (value as Error).message === "string") {
@@ -29,13 +36,19 @@ export function describe(value: unknown, fallbackMessage = ""): { message: strin
   }
   if (typeof value === "string") return { message: value, stack: null };
   if (value === undefined || value === null) return { message: fallbackMessage || String(value), stack: null };
-  let text: string | undefined;
-  try {
-    text = JSON.stringify(value);
-  } catch {
-    // Cycles and BigInt: the plain conversion below still says what it was.
-  }
-  return { message: text ?? String(value), stack: null };
+  if (typeof value === "function") return { message: "function", stack: null };
+  if (typeof value === "object") return { message: shape(value), stack: null };
+  return { message: String(value), stack: null };
+}
+
+/** `Array(3)`, `Object{code,path}`: the type and key names of an object without any of its values. */
+function shape(value: object): string {
+  if (Array.isArray(value)) return `Array(${value.length})`;
+  const ctor: unknown = Object.getPrototypeOf(value)?.constructor;
+  const name = typeof ctor === "function" && ctor.name ? ctor.name : "Object";
+  const keys = Object.keys(value);
+  const more = keys.length > MAX_KEYS ? ",…" : "";
+  return `${name}{${keys.slice(0, MAX_KEYS).join(",")}${more}}`;
 }
 
 const FRAME_URL = /([a-z][a-z0-9+.-]*:\/\/[^\s()@]+?)(?::\d+){1,2}\)?\s*$/i;
@@ -60,15 +73,28 @@ export function debugIdsByUrl(raw: unknown): Record<string, string> {
   return out;
 }
 
-/** Dedupes by kind and message and stops after `max` reports; never throws, whatever `send` does. */
+/**
+ * Dedupes by kind and message and stops after `max` reports, both within a `windowMs` window; never throws, whatever
+ * `send` does.
+ */
 export function createReporter(
   send: (report: JsErrorReport) => Promise<unknown>,
   readDebugIds: () => Record<string, string>,
-  max = MAX_REPORTS,
+  {
+    max = MAX_REPORTS,
+    windowMs = REPORT_WINDOW_MS,
+    now = Date.now,
+  }: { max?: number; windowMs?: number; now?: () => number } = {},
 ): ReportFn {
   const seen = new Set<string>();
+  let windowStart = now();
   return (kind, value, fallbackMessage) => {
     try {
+      const time = now();
+      if (time - windowStart >= windowMs) {
+        seen.clear();
+        windowStart = time;
+      }
       if (seen.size >= max) return false;
       const { message, stack } = describe(value, fallbackMessage);
       const short = truncate(message, MAX_MESSAGE);
@@ -100,7 +126,7 @@ export function attach(target: Pick<EventTarget, "addEventListener">, report: Re
 
 let installed = false;
 
-/** First thing in every page's main.tsx. */
+/** Called by telemetry-install.ts, the first import of every page's main.tsx. */
 export function installErrorReporting() {
   if (installed) return;
   installed = true;

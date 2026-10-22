@@ -1,14 +1,25 @@
-import { describe as group, expect, it, vi } from "vitest";
-import type { JsErrorReport } from "./ipc";
-import { attach, createReporter, debugIdsByUrl, describe, MAX_MESSAGE, MAX_REPORTS, MAX_STACK, truncate } from "./telemetry";
+import { afterEach, describe as group, expect, it, vi } from "vitest";
+import { api, type JsErrorReport } from "./ipc";
+import {
+  attach,
+  createReporter,
+  debugIdsByUrl,
+  describe,
+  installErrorReporting,
+  MAX_MESSAGE,
+  MAX_REPORTS,
+  MAX_STACK,
+  REPORT_WINDOW_MS,
+  truncate,
+} from "./telemetry";
 
-const setup = (max?: number) => {
+const setup = (limits?: Parameters<typeof createReporter>[2]) => {
   const sent: JsErrorReport[] = [];
   const send = vi.fn((r: JsErrorReport) => {
     sent.push(r);
     return Promise.resolve();
   });
-  const report = createReporter(send, () => ({ "app:///assets/a.js": "d1" }), max);
+  const report = createReporter(send, () => ({ "app:///assets/a.js": "d1" }), limits);
   return { sent, send, report };
 };
 
@@ -31,16 +42,27 @@ group("describe", () => {
     const err = new TypeError("x is not a function");
     expect(describe(err)).toEqual({ message: "TypeError: x is not a function", stack: err.stack });
     expect(describe("could not save")).toEqual({ message: "could not save", stack: null });
-    expect(describe({ code: 5 })).toEqual({ message: '{"code":5}', stack: null });
     expect(describe(42)).toEqual({ message: "42", stack: null });
+    expect(describe(false)).toEqual({ message: "false", stack: null });
     expect(describe(undefined)).toEqual({ message: "undefined", stack: null });
     expect(describe(null, "Uncaught boom")).toEqual({ message: "Uncaught boom", stack: null });
   });
 
-  it("survives values JSON cannot write", () => {
+  it("gives only the shape of other objects, never their values", () => {
+    expect(describe({ code: 5, path: "C:\Users\anna\shot.png", comment: "my note" })).toEqual({
+      message: "Object{code,path,comment}",
+      stack: null,
+    });
+    expect(describe(["C:\Users\anna"]).message).toBe("Array(1)");
+    expect(describe(new Map([["k", "v"]])).message).toBe("Map{}");
+    expect(describe(Object.create(null)).message).toBe("Object{}");
+    expect(describe(Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`k${i}`, i]))).message).toBe(
+      "Object{k0,k1,k2,k3,k4,k5,k6,k7,…}",
+    );
+    expect(describe(() => "secret").message).toBe("function");
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    expect(describe(cyclic).message).toBe("[object Object]");
+    expect(describe(cyclic).message).toBe("Object{self}");
     expect(describe(10n).message).toBe("10");
   });
 
@@ -69,6 +91,20 @@ group("createReporter", () => {
     const { send, report } = setup();
     for (let i = 0; i < MAX_REPORTS + 3; i++) report("error", new Error(`boom ${i}`));
     expect(send).toHaveBeenCalledTimes(MAX_REPORTS);
+  });
+
+  it("starts counting and deduping again in the next window", () => {
+    let time = 1_000;
+    const { send, report } = setup({ now: () => time });
+    for (let i = 0; i < MAX_REPORTS; i++) report("error", new Error(`boom ${i}`));
+    expect(report("error", new Error("new"))).toBe(false);
+    time += REPORT_WINDOW_MS - 1;
+    expect(report("error", new Error("new"))).toBe(false);
+    time += 1;
+    expect(report("error", new Error("boom 0"))).toBe(true);
+    expect(report("error", new Error("boom 0"))).toBe(false);
+    expect(report("error", new Error("new"))).toBe(true);
+    expect(send).toHaveBeenCalledTimes(MAX_REPORTS + 2);
   });
 
   it("truncates long messages and stacks", () => {
@@ -111,6 +147,27 @@ group("debugIdsByUrl", () => {
     });
   });
 
+  it("reads what the plugin's injected snippet writes", () => {
+    // getDebugIdSnippet of @sentry/bundler-plugins 11.8.0 inside its CodeInjection wrapper, as it opens each chunk.
+    const id = "4f2c8a1e-0b7d-4e3a-9c55-1d2e3f4a5b6c";
+    const snippet = `!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{};var n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="${id}",e._sentryDebugIdIdentifier="sentry-dbid-${id}");}catch(e){}}();`;
+    // Run as the chunks would be: sourceURL gives the frames their script URL, as the webview does.
+    const page = globalThis as { _sentryDebugIds?: unknown; _sentryDebugIdIdentifier?: unknown };
+    const run = (code: string, url: string) => (0, eval)(`${code}
+//# sourceURL=${url}`);
+    try {
+      run(snippet, "http://tauri.localhost/assets/settings-B1x.js");
+      run(snippet.replaceAll(id, "other-id"), "http://tauri.localhost/assets/ipc-C9z.js");
+      expect(debugIdsByUrl(page._sentryDebugIds)).toEqual({
+        "http://tauri.localhost/assets/settings-B1x.js": id,
+        "http://tauri.localhost/assets/ipc-C9z.js": "other-id",
+      });
+    } finally {
+      delete page._sentryDebugIds;
+      delete page._sentryDebugIdIdentifier;
+    }
+  });
+
   it("is empty without the plugin", () => {
     expect(debugIdsByUrl(undefined)).toEqual({});
     expect(debugIdsByUrl("x")).toEqual({});
@@ -131,5 +188,24 @@ group("attach", () => {
       ["unhandledRejection", "command failed"],
       ["error", null, "Script error."],
     ]);
+  });
+});
+
+group("installErrorReporting", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("listens once, however often it is called", () => {
+    const page = new EventTarget();
+    const listen = vi.spyOn(page, "addEventListener");
+    const send = vi.spyOn(api, "reportJsError").mockResolvedValue(undefined);
+    vi.stubGlobal("window", page);
+    installErrorReporting();
+    installErrorReporting();
+    expect(listen.mock.calls.map(([type]) => type)).toEqual(["error", "unhandledrejection"]);
+    page.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: "command failed" }));
+    expect(send).toHaveBeenCalledWith({ kind: "unhandledRejection", message: "command failed", stack: null, debugIds: {} });
   });
 });

@@ -1,5 +1,5 @@
-/* The strip window is 132 css px wide and 132 + 92 * min(count, 6) tall (src-tauri/src/windows_ui.rs).
-   Fixed parts: border 2 + padding 10 + header 26 + gaps 8 + footer 90 = 136 px; the list gets the rest,
+/* The strip window is 132 css px wide and 160 + 92 * min(count, 6) tall (src-tauri/src/windows_ui.rs).
+   Fixed parts: border 2 + padding 10 + header 26 + gaps 8 + footer 118 = 164 px; the list gets the rest,
    at least 92 * count - 4 px for items of 86 px with 6 px gaps. Keep the sum when changing sizes. */
 
 :root {
@@ -177,6 +177,24 @@ body,
   flex-direction: column;
   gap: 4px;
   flex: none;
+}
+
+/* Copy mode toggle: 24 px tall, two segments of about 56 px. */
+.strip-mode .seg {
+  display: flex;
+  height: 24px;
+  padding: 2px;
+  gap: 1px;
+}
+.strip-mode .seg-item {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0 1px;
+  font-size: 10.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .strip-primary {

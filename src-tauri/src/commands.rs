@@ -227,12 +227,12 @@ pub fn get_set(app: AppHandle) -> SetInfo {
 
 #[tauri::command]
 pub async fn set_copy_all(app: AppHandle) -> Result<(), String> {
-    actions::copy_all(&app)
+    actions::copy_all(&app).await
 }
 
 #[tauri::command]
 pub async fn set_save_all(app: AppHandle) -> Result<usize, String> {
-    actions::save_all(&app)
+    actions::save_all(&app).await
 }
 
 /// Body: the composed sheet (raw PNG). Header `x-meta`: URI-encoded JSON of `SheetPutMeta`.

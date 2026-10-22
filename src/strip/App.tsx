@@ -1,12 +1,13 @@
 // Snapshot strip: a narrow floating panel docked at the right edge while a multi-snapshot set exists.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
-import { api, events, snapshotUrl, type SetInfo, type Snapshot } from "../shared/ipc";
+import { api, events, snapshotUrl, type SetCopyMode, type SetInfo, type Snapshot } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
 import { formatAccelerator, guessPlatform } from "../shared/ui/hotkey";
 import { Icon } from "../shared/ui/icons";
-import { Spinner } from "../shared/ui/controls";
+import { Segmented, Spinner } from "../shared/ui/controls";
+import { startComposer } from "./composer";
 import { commentCount, totalComments } from "./counts";
 
 type Busy = "copy" | "save" | "new" | "clear" | null;
@@ -20,6 +21,7 @@ export function App() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [failed, setFailed] = useState(false);
   const failTimer = useRef<number | undefined>(undefined);
+  const modeLabelId = useId();
 
   const refresh = useCallback(() => {
     api
@@ -37,7 +39,31 @@ export function App() {
     };
   }, [refresh]);
 
+  // The core asks this window to compose one-picture sheets.
+  useEffect(
+    () =>
+      startComposer({
+        listen: events.onSheetRequest,
+        pending: api.sheetPending,
+        put: api.sheetPut,
+        fail: api.sheetFailed,
+        metric: api.logMetric,
+        imageUrl: snapshotUrl,
+      }),
+    [],
+  );
+
   const snapshots = set?.snapshots ?? [];
+  const copyMode = set?.copyMode ?? "album";
+  const picture = copyMode === "onePicture";
+
+  // Copy all and Save all read the mode from the settings, so they wait for a toggle that is still being saved.
+  const modeSaved = useRef<Promise<unknown>>(Promise.resolve());
+  const changeMode = (mode: SetCopyMode) => {
+    setSet((s) => (s ? { ...s, copyMode: mode } : s));
+    modeSaved.current = api.updateSettings({ setCopyMode: mode }).catch(refresh);
+  };
+
   useEffect(() => {
     if (snapshots.length === 0) setConfirmClear(false);
   }, [snapshots.length]);
@@ -46,6 +72,7 @@ export function App() {
     setBusy(kind);
     setFailed(false);
     try {
+      await modeSaved.current;
       await action();
     } catch {
       setFailed(true);
@@ -77,10 +104,26 @@ export function App() {
       </ul>
 
       <footer className="strip-foot">
+        <div className="strip-mode" title={`${t("strip.modeAlbum")}: ${t("strip.modeAlbumHint")}\n${t("strip.modePicture")}: ${t("strip.modePictureHint")}`}>
+          <span id={modeLabelId} hidden>
+            {t("strip.copyMode")}
+          </span>
+          <Segmented<SetCopyMode>
+            value={copyMode}
+            options={[
+              { value: "album", label: t("strip.modeAlbum") },
+              { value: "onePicture", label: t("strip.modePicture") },
+            ]}
+            onChange={changeMode}
+            labelledBy={modeLabelId}
+            disabled={!set || busy !== null}
+          />
+        </div>
+
         <button
           type="button"
           className="strip-primary"
-          title={t("strip.copyAllHint")}
+          title={picture ? t("strip.copyAllPictureHint") : t("strip.copyAllHint")}
           disabled={busy !== null || snapshots.length === 0}
           aria-busy={busy === "copy" || undefined}
           onClick={() => run("copy", api.setCopyAll)}
@@ -120,7 +163,7 @@ export function App() {
               <ToolButton
                 icon="save"
                 label={t("strip.saveAll")}
-                hint={t("strip.saveAllHint")}
+                hint={picture ? t("strip.saveAllPictureHint") : t("strip.saveAllHint")}
                 busy={busy === "save"}
                 disabled={busy !== null || snapshots.length === 0}
                 onClick={() => run("save", api.setSaveAll)}

@@ -3,8 +3,9 @@
 
 use crate::clipboard;
 use crate::export;
-use crate::i18n::tr;
+use crate::i18n::{Lang, tr};
 use crate::session::{self, Mark, Session};
+use crate::settings::SetCopyMode;
 use crate::state::{AppState, LastCopy};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -26,6 +27,8 @@ const LAST_COPY_TTL: Duration = Duration::from_secs(15 * 60);
 /// Files of a cleared set or a removed snapshot stay this long: a paste in progress may still upload them.
 const REMOVED_FILES_GRACE: Duration = Duration::from_secs(10 * 60);
 const CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// The paste shortcut named in the no-upload note.
+const PASTE_KEYS: &str = if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" };
 
 static LAST_COPY_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// A smart paste is running; further presses (key repeat, our own synthetic keys) are dropped.
@@ -74,7 +77,6 @@ pub struct FinishMeta {
     #[serde(default = "one")]
     pub scale: f32,
     #[serde(default)]
-    #[allow(dead_code)] // Read by the noUpload toast (WP1).
     pub hint: Option<FinishHint>,
     /// Annotations per drawing tool, for the usage counters. Keys come from the webview: only the names in
     /// the overlay's DRAW_TOOLS may become counters.
@@ -95,6 +97,8 @@ enum Finished {
     Added,
     /// Added to the set; the copy of the whole set may still have failed.
     AddedAndCopied(Result<(), String>),
+    /// Added to the set in one-picture mode: the picture is built and copied once the overlay is gone.
+    AddedThenPicture,
 }
 
 /// Runs the action while the overlay stays open, so a failed copy, save or add keeps the annotated snapshot:
@@ -122,6 +126,9 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
         FinishAction::Save => save_one(app, &image, &meta.format).map(Finished::Saved),
         FinishAction::AddToSet | FinishAction::CopyAll => {
             add_to_set(app, &image, &meta, marks.clone()).map(|()| match meta.action {
+                // The strip composes the picture, and for the first snapshot of a set it does not exist yet:
+                // it appears with `after_set_changed`, after the hide.
+                FinishAction::CopyAll if one_picture(app) => Finished::AddedThenPicture,
                 FinishAction::CopyAll => Finished::AddedAndCopied(copy_set_to_clipboard(app)),
                 _ => Finished::Added,
             })
@@ -165,7 +172,7 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
         Finished::Copied(copy) => {
             let with_text = copy.is_some();
             set_last_copy(app, copy);
-            if with_text {
+            let smart_paste = with_text.then(|| {
                 let hotkey = crate::tray::display_hotkey(&state.settings().smart_paste_hotkey);
                 // Promise the hotkey only when it is really registered (it may be taken by another app).
                 let key = if crate::hotkeys::settled_status(app).smart_paste_registered {
@@ -173,10 +180,11 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
                 } else {
                     "toast.smartPasteOff"
                 };
-                let detail = tr(lang, key).replace("{hotkey}", &hotkey);
-                crate::notice::toast_with_detail(app, tr(lang, "toast.copied"), &detail);
-            } else {
-                crate::notice::toast(app, tr(lang, "toast.copied"));
+                tr(lang, key).replace("{hotkey}", &hotkey)
+            });
+            match copied_detail(lang, smart_paste, meta.hint) {
+                Some(detail) => crate::notice::toast_with_detail(app, tr(lang, "toast.copied"), &detail),
+                None => crate::notice::toast(app, tr(lang, "toast.copied")),
             }
         }
         Finished::Saved(path) => {
@@ -200,6 +208,25 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
                 }
             }
         }
+        Finished::AddedThenPicture => {
+            // Counted once the picture is on the clipboard, like a set copy that worked.
+            nudge = false;
+            set_last_copy(app, None);
+            after_set_changed(app);
+            let app = app.clone();
+            let marks = marks.len() as u32;
+            std::thread::spawn(move || match copy_picture(&app) {
+                Ok(cramped) => {
+                    picture_toast(&app, lang, cramped);
+                    record_and_maybe_nudge(&app, marks);
+                }
+                // No fallback to the album: the user picked this mode. The snapshot is in the set already.
+                Err(err) => {
+                    log::error!("one picture failed: {err}");
+                    crate::notice::toast_error(&app, tr(lang, "toast.pictureFailed"), Some(&err));
+                }
+            });
+        }
     }
     if nudge {
         record_and_maybe_nudge(app, marks.len() as u32);
@@ -213,6 +240,13 @@ fn copy_single(png: Vec<u8>, text: String) -> Result<Option<LastCopy>, String> {
     let with_text = !text.is_empty();
     clipboard::copy_image(png.clone(), with_text.then(|| text.clone())).map_err(|e| e.to_string())?;
     Ok(with_text.then_some(LastCopy { png, text }))
+}
+
+/// Second line of the "Copied" toast: the smart paste hint wins over the no-upload note (Lightshot's Ctrl+D).
+fn copied_detail(lang: Lang, smart_paste: Option<String>, hint: Option<FinishHint>) -> Option<String> {
+    smart_paste.or_else(|| {
+        (hint == Some(FinishHint::NoUpload)).then(|| tr(lang, "toast.noUpload").replace("{paste}", PASTE_KEYS))
+    })
 }
 
 /// Replaces the single copy available to smart paste and re-registers hotkeys when availability changes.
@@ -309,15 +343,52 @@ fn reserve_letter(app: &AppHandle, letter: Option<char>) -> bool {
 
 pub fn after_set_changed(app: &AppHandle) {
     crate::windows_ui::sync_strip(app);
+    // After the strip: for the first snapshot it is created here, and it picks the request up once loaded.
+    crate::sheet::request_prewarm(app);
     crate::hotkeys::apply(app);
     crate::tray::refresh(app);
 }
 
-/// Strip "Copy all": the set becomes what smart paste pastes, even if a single copy came after it.
-pub fn copy_all(app: &AppHandle) -> Result<(), String> {
-    copy_set_to_clipboard(app)?;
-    set_last_copy(app, None);
-    crate::notice::toast(app, tr(app.state::<AppState>().lang(), "toast.copiedAll"));
+fn one_picture(app: &AppHandle) -> bool {
+    app.state::<AppState>().settings().set_copy_mode == SetCopyMode::OnePicture
+}
+
+/// The whole set as one picture, bitmap only: the comments are drawn under each snapshot, text would repeat
+/// them. Returns whether the picture is cramped. Blocks until the strip has built it.
+fn copy_picture(app: &AppHandle) -> Result<bool, String> {
+    let sheet = crate::sheet::ensure(app, None, true)?;
+    clipboard::copy_image(sheet.png.to_vec(), None).map_err(|e| e.to_string())?;
+    log::info!("set copied as one {}x{} picture", sheet.width, sheet.height);
+    Ok(sheet.cramped)
+}
+
+fn picture_toast(app: &AppHandle, lang: Lang, cramped: bool) {
+    let text = tr(lang, "toast.copiedPicture");
+    if cramped {
+        crate::notice::toast_with_detail(app, text, tr(lang, "toast.pictureCramped"));
+    } else {
+        crate::notice::toast(app, text);
+    }
+}
+
+/// Strip "Copy all": the set becomes what smart paste pastes, even if a single copy came after it. Off the
+/// async workers: one picture waits for the strip, which needs a worker to deliver it.
+pub async fn copy_all(app: &AppHandle) -> Result<(), String> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || copy_all_blocking(&app)).await.map_err(|e| e.to_string())?
+}
+
+fn copy_all_blocking(app: &AppHandle) -> Result<(), String> {
+    let lang = app.state::<AppState>().lang();
+    if one_picture(app) {
+        let cramped = copy_picture(app)?;
+        set_last_copy(app, None);
+        picture_toast(app, lang, cramped);
+    } else {
+        copy_set_to_clipboard(app)?;
+        set_last_copy(app, None);
+        crate::notice::toast(app, tr(lang, "toast.copiedAll"));
+    }
     Ok(())
 }
 
@@ -334,10 +405,29 @@ fn copy_set_to_clipboard(app: &AppHandle) -> Result<(), String> {
     clipboard::copy_files(files, Some(text), Some(html)).map_err(|e| e.to_string())
 }
 
-pub fn save_all(app: &AppHandle) -> Result<usize, String> {
+/// Strip "Save all": every snapshot as its own file, or in one-picture mode the set as one PNG. Returns the
+/// number of snapshots saved.
+pub async fn save_all(app: &AppHandle) -> Result<usize, String> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || save_all_blocking(&app)).await.map_err(|e| e.to_string())?
+}
+
+fn save_all_blocking(app: &AppHandle) -> Result<usize, String> {
     let state = app.state::<AppState>();
     let dir = save_dir(app);
     let stem = export::timestamp_stem(chrono::Local::now());
+    if one_picture(app) {
+        let letters = state.session.lock().unwrap().as_ref().map(Session::letters).unwrap_or_default();
+        if letters.is_empty() {
+            return Ok(0);
+        }
+        let sheet = crate::sheet::ensure(app, Some(&letters), true)?;
+        // Always PNG, like the album files: the sheet is text and UI.
+        let path = export::save_unique(&dir, &picture_stem(&stem, &letters), "png", &sheet.png).map_err(|e| e.to_string())?;
+        crate::notice::toast_with_detail(app, tr(state.lang(), "toast.saved"), &path.to_string_lossy());
+        record_and_maybe_nudge(app, 0);
+        return Ok(letters.len());
+    }
     let snapshots = state.session.lock().unwrap().as_ref().map(|s| s.snapshots.clone()).unwrap_or_default();
     for snap in &snapshots {
         let bytes = std::fs::read(&snap.path).map_err(|e| e.to_string())?;
@@ -348,6 +438,11 @@ pub fn save_all(app: &AppHandle) -> Result<usize, String> {
         record_and_maybe_nudge(app, 0);
     }
     Ok(snapshots.len())
+}
+
+/// "WellSnap_..._A-F" for a saved picture of a set, "WellSnap_..._A" for one snapshot.
+fn picture_stem(stem: &str, letters: &[char]) -> String {
+    format!("{stem}_{}", crate::sheet::letter_range(letters))
 }
 
 pub fn clear_set(app: &AppHandle) {
@@ -377,9 +472,9 @@ pub fn remove_from_set(app: &AppHandle, letter: char) {
     after_set_changed(app);
 }
 
-/// Deletes a removed snapshot file or a cleared set folder after the grace period, unless it belongs to the
-/// current set by then.
-fn delete_later(app: &AppHandle, path: PathBuf) {
+/// Deletes a removed snapshot file, a cleared set folder or an evicted sheet after the grace period, unless it
+/// belongs to the current set by then.
+pub(crate) fn delete_later(app: &AppHandle, path: PathBuf) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(REMOVED_FILES_GRACE);
@@ -611,6 +706,21 @@ mod tests {
         let marks = vec![Mark { num: 1, comment: "a".into() }, Mark { num: 2, comment: String::new() }];
         assert_eq!(single_text(None, &marks), "1 a");
         assert_eq!(single_text(Some('C'), &marks), "C1 a");
+    }
+
+    #[test]
+    fn copied_toast_explains_no_upload_unless_smart_paste_has_a_hint() {
+        let smart = Some("Ctrl+Alt+V: paste".to_string());
+        assert_eq!(copied_detail(Lang::En, smart.clone(), Some(FinishHint::NoUpload)), smart);
+        assert_eq!(copied_detail(Lang::En, None, None), None);
+        let note = copied_detail(Lang::Ru, None, Some(FinishHint::NoUpload)).unwrap();
+        assert!(note.starts_with("WellSnap ничего не загружает") && note.contains(PASTE_KEYS) && !note.contains("{paste}"));
+    }
+
+    #[test]
+    fn a_saved_picture_is_named_after_its_letters() {
+        assert_eq!(picture_stem("WellSnap_2026-10-22_14-05-33", &['A', 'B', 'F']), "WellSnap_2026-10-22_14-05-33_A-F");
+        assert_eq!(picture_stem("WellSnap_2026-10-22_14-05-33", &['A']), "WellSnap_2026-10-22_14-05-33_A");
     }
 
     #[test]

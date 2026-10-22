@@ -47,6 +47,11 @@ impl Snapshot {
     fn text_marks(&self) -> impl Iterator<Item = &Mark> {
         self.marks.iter().filter(|m| !self.comments_on_image && !m.comment.is_empty())
     }
+
+    /// Some comment of this snapshot travels as text.
+    pub fn has_text(&self) -> bool {
+        self.text_marks().next().is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +137,11 @@ impl Session {
         self.snapshots.iter().map(|s| s.path.clone()).collect()
     }
 
+    /// Letters of the snapshots in the set, in order.
+    pub fn letters(&self) -> Vec<char> {
+        self.snapshots.iter().map(|s| s.letter).collect()
+    }
+
     /// "Снимок A / A1 comment / A2 comment / (blank) / Снимок B / ...". Only commented marks are listed;
     /// snapshots without text comments (none, or drawn on the image) are omitted. Empty when there is nothing
     /// to say.
@@ -152,18 +162,28 @@ impl Session {
     /// comments. Never a file URL: that would put the cache path, with the user's login, into the document, and
     /// the link breaks once the cache is cleaned. Reads the set's files.
     pub fn html_block(&self, lang: Lang) -> String {
+        self.html_with_limit(lang, HTML_IMAGES_MAX_BYTES).0
+    }
+
+    /// `html_block` and whether every picture is in it (false when the set is too large to embed them, or a
+    /// file could not be read).
+    #[allow(dead_code)] // Used by smart paste's rich-HTML targets (WP4b).
+    pub fn html_block_with_images(&self, lang: Lang) -> (String, bool) {
         self.html_with_limit(lang, HTML_IMAGES_MAX_BYTES)
     }
 
     /// Without pictures when they would exceed `limit` bytes as base64; the files still go as a file list.
-    fn html_with_limit(&self, lang: Lang, limit: usize) -> String {
+    fn html_with_limit(&self, lang: Lang, limit: usize) -> (String, bool) {
         let title = tr(lang, "block.snapshot");
         let total: u64 = self.snapshots.iter().map(|s| fs::metadata(&s.path).map_or(0, |m| m.len())).sum();
         let embed = usize::try_from(total).is_ok_and(|total| total.div_ceil(3) * 4 <= limit);
+        let mut complete = embed && !self.snapshots.is_empty();
         let mut html = String::new();
         for snap in &self.snapshots {
             html.push_str(&format!("<p><b>{title} {}</b></p>", snap.letter));
-            if let Some(png) = embed.then(|| fs::read(&snap.path).ok()).flatten() {
+            let png = embed.then(|| fs::read(&snap.path).ok()).flatten();
+            complete &= png.is_some();
+            if let Some(png) = png {
                 html.push_str(&format!(
                     "<p><img src=\"data:image/png;base64,{}\" width=\"{}\" height=\"{}\" alt=\"{title} {}\"></p>",
                     base64(&png),
@@ -180,7 +200,7 @@ impl Session {
                 html.push_str(&format!("<ul>{}</ul>", items.join("")));
             }
         }
-        html
+        (html, complete)
     }
 }
 
@@ -394,9 +414,31 @@ B1 текстом");
         assert!(html.contains("<img src=\"data:image/png;base64,cG5n\""));
         assert!(!html.contains("file:") && !html.contains(&*s.dir.to_string_lossy()));
         // Over the size limit: headings and comments only.
-        let small = s.html_with_limit(Lang::En, 3);
+        let (small, embedded) = s.html_with_limit(Lang::En, 3);
         assert!(!small.contains("<img") && small.contains("Screenshot A") && small.contains("A1</b> x"));
-        assert!(s.html_with_limit(Lang::En, 4).contains("<img"));
+        assert!(!embedded, "smart paste must not treat it as rich HTML");
+        let (full, embedded) = s.html_with_limit(Lang::En, 4);
+        assert!(full.contains("<img") && embedded);
+        assert_eq!(s.html_block_with_images(Lang::En), (s.html_block(Lang::En), true));
+        assert_eq!(session("html-empty").html_block_with_images(Lang::En), (String::new(), false));
+        // A file gone from the cache: the HTML lacks its picture, so it is not complete.
+        s.add(b"png", 1, 1, 1.0, vec![], false).unwrap();
+        fs::remove_file(&s.get('B').unwrap().path).unwrap();
+        let (partial, embedded) = s.html_block_with_images(Lang::En);
+        assert!(partial.contains("<img") && partial.contains("Screenshot B") && !embedded);
+    }
+
+    #[test]
+    fn letters_and_text_follow_the_set() {
+        let mut s = session("letters-list");
+        assert!(s.letters().is_empty());
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "on image")]), true).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "text")]), false).unwrap();
+        s.remove('B');
+        assert_eq!(s.letters(), vec!['A', 'C']);
+        assert!(!s.get('A').unwrap().has_text(), "drawn on the image");
+        assert!(s.get('C').unwrap().has_text());
     }
 
     #[test]

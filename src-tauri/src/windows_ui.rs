@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowB
 
 pub const STRIP: &str = "strip";
 const STRIP_WIDTH: f64 = 132.0;
-const STRIP_HEADER: f64 = 132.0;
+const STRIP_HEADER: f64 = 160.0;
 const STRIP_ITEM: f64 = 92.0;
 const STRIP_MAX_VISIBLE: f64 = 6.0;
 

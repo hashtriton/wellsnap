@@ -1,7 +1,7 @@
 // Renders the selection at physical resolution: frozen pixels, annotations and, when the comments go on the
 // image, the callout bubbles (same renderer as the screen), then encodes. The output is a flat raster:
 // nothing under a blur survives.
-import type { CommentPlacement, FinishAction, FinishMeta, ImageFormat } from "../shared/ipc";
+import type { CommentPlacement, FinishAction, FinishHint, FinishMeta, ImageFormat } from "../shared/ipc";
 import { marksMeta } from "./marks";
 import { drawAnnotations, drawCallouts, type RenderEnv } from "./render";
 import type { Annotation, Rect } from "./types";
@@ -61,6 +61,9 @@ export interface MetaInput {
   /** Selection the image was cut from: callouts outside it are not in the text either. */
   crop: Rect;
   image: Pick<ExportResult, "width" | "height">;
+  /** Physical px per CSS px of the monitor the screenshot was taken on. */
+  scale: number;
+  hint?: FinishHint;
 }
 
 /** Metadata for `overlay_finish`; with the comments on the image the core does not repeat them as text. */
@@ -74,5 +77,15 @@ export function finishMeta(m: MetaInput): FinishMeta {
     marks: marksMeta(m.annotations, exportCrop(m.crop)),
     commentsOnImage: m.placement === "onImage",
     format: m.format,
+    scale: m.scale,
+    hint: m.hint,
+    tools: toolCounts(m.annotations),
   };
+}
+
+/** Only the tool names and counts: no text, colors or positions. */
+function toolCounts(annotations: readonly Annotation[]): Record<string, number> {
+  const tools: Record<string, number> = {};
+  for (const a of annotations) tools[a.kind] = (tools[a.kind] ?? 0) + 1;
+  return tools;
 }

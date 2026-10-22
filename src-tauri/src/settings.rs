@@ -42,6 +42,26 @@ pub enum EnterAction {
     Save,
 }
 
+/// How the strip's "Copy all" and "Save all" hand over a set: one file per snapshot (an album in chats), or
+/// every snapshot composed into one picture.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SetCopyMode {
+    #[default]
+    Album,
+    OnePicture,
+}
+
+/// Crash reports: sent without asking, kept until the user answers a prompt, or not captured at all.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CrashMode {
+    #[default]
+    Always,
+    Ask,
+    Never,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -73,6 +93,15 @@ pub struct Settings {
     /// The user approved turning off the Windows "Print Screen opens Snipping Tool" setting. Kept here, not only
     /// in the registry, because a reinstall without /UPDATE restores the setting and clears the registry marker.
     pub print_screen_taken_over: bool,
+    /// Remembered toggle on the strip.
+    pub set_copy_mode: SetCopyMode,
+    /// Fingerprint of the last startup warning about a taken capture hotkey, so it is shown once. Core-owned;
+    /// cleared when the capture hotkey changes.
+    pub hotkey_warning: Option<String>,
+    /// Only builds with the "telemetry" feature and keys send anything, and only after onboarding.
+    pub crash_reports: CrashMode,
+    /// Anonymous daily usage totals; same conditions as `crash_reports`.
+    pub usage_stats: bool,
 }
 
 impl Default for Settings {
@@ -96,6 +125,10 @@ impl Default for Settings {
             auto_check_updates: true,
             auto_install_updates: true,
             print_screen_taken_over: false,
+            set_copy_mode: SetCopyMode::Album,
+            hotkey_warning: None,
+            crash_reports: CrashMode::Always,
+            usage_stats: true,
         }
     }
 }
@@ -208,10 +241,38 @@ mod tests {
         assert!(s.auto_check_updates);
         assert!(s.auto_install_updates);
         assert!(!s.print_screen_taken_over);
+        assert_eq!(s.set_copy_mode, SetCopyMode::Album);
+        assert_eq!(s.hotkey_warning, None);
+        assert_eq!(s.crash_reports, CrashMode::Always, "opt-out: on for existing installs too");
+        assert!(s.usage_stats);
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["autoCheckUpdates"], true);
         assert_eq!(json["autoInstallUpdates"], true);
         assert_eq!(json["printScreenTakenOver"], false);
+        assert_eq!(json["setCopyMode"], "album");
+        assert_eq!(json["hotkeyWarning"], serde_json::Value::Null);
+        assert_eq!(json["crashReports"], "always");
+        assert_eq!(json["usageStats"], true);
+    }
+
+    #[test]
+    fn copy_mode_crash_mode_and_warning_round_trip() {
+        let dir = temp_dir("settings-modes");
+        let path = settings_path(&dir);
+        fs::write(
+            &path,
+            r#"{"setCopyMode": "onePicture", "crashReports": "ask", "usageStats": false, "hotkeyWarning": "PrintScreen|taken|oneDrive"}"#,
+        )
+        .unwrap();
+        let s = load(&path);
+        assert_eq!(s.set_copy_mode, SetCopyMode::OnePicture);
+        assert_eq!(s.crash_reports, CrashMode::Ask);
+        assert!(!s.usage_stats);
+        assert_eq!(s.hotkey_warning.as_deref(), Some("PrintScreen|taken|oneDrive"));
+        save(&path, &s).unwrap();
+        assert_eq!(load(&path), s);
+        let never = Settings { crash_reports: CrashMode::Never, ..Default::default() };
+        assert_eq!(serde_json::to_value(&never).unwrap()["crashReports"], "never");
     }
 
     #[test]

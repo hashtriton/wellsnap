@@ -8,6 +8,7 @@ export const settings: typeof ru = {
     hotkeys: "Shortcuts",
     screenshots: "Screenshots",
     support: "Support",
+    privacy: "Privacy",
     about: "About",
   },
   applyFailed: "Could not apply the setting. Please try again.",
@@ -52,6 +53,13 @@ export const settings: typeof ru = {
     statusIdle: "Turns on when there is something to paste: screenshots in the strip or a screenshot just copied with separate text",
     statusTaken: "Could not register this shortcut: the system or another app is using it. Please pick another.",
     statusReserved: "Not active: every app uses this shortcut to copy, paste or undo. Please pick another.",
+    statusTakenBy:
+      "Not active: {app} is using {hotkey}. Turn off {hotkey} in {app} or quit it, then click \"Check again\".",
+    statusTakenByMany: "Not active: another app is using {hotkey}. Most likely {apps}.",
+    checkAgain: "Check again",
+    useAlternative: "Use {hotkey}",
+    howToFix: "How to fix",
+    smartPasteWhere: "Where paste with text is tested",
     macSystem:
       "{shot3}, {shot4} and {shot5} belong to macOS and open the system screenshot tools. WellSnap uses {ours} by default.",
   },
@@ -66,6 +74,30 @@ export const settings: typeof ru = {
     onedrive:
       "OneDrive can also grab Print Screen. If screenshots end up in OneDrive, turn off saving screenshots in its settings, under \"Sync and backup\".",
     failed: "Could not change the Windows setting. Open Windows settings and turn off opening Snipping Tool with Print Screen.",
+  },
+  conflicts: {
+    title: "Other programs",
+    mayDouble: "{app} may also react to {hotkey}. If two apps open at once, turn off {hotkey} in {app}.",
+    hide: "Hide",
+    or: "or",
+    steps: {
+      dropbox:
+        "Dropbox taskbar icon > your avatar > Preferences > Screenshots > turn off \"Save screenshots to your Dropbox\".",
+      lightshot:
+        "Right-click the Lightshot tray icon > Options > Hotkeys > clear the main hotkey. If you switched to WellSnap, you can just quit Lightshot.",
+      yandexDisk:
+        "Yandex Disk: File > Settings, click the icon in the full-screen screenshot field to clear Print Screen, or turn off Keyboard shortcuts.",
+      shareX: "ShareX main window > Hotkey settings > change the Print Screen shortcuts.",
+      greenshot: "Greenshot tray icon > Preferences > hotkeys.",
+      snagit:
+        "Snagit Capture window > File > Capture Preferences > Hotkeys. Clear \"Allow Snagit to override other hotkey assignments\".",
+      picPick: "PicPick: Program Options > Hotkeys.",
+      gyazo: "Gyazo settings > turn off \"Launch Gyazo with the PrintScreen key\".",
+      screenpresso: "Screenpresso: Workspace > settings icon at the top right > Hot keys.",
+      fastStone: "FastStone Capture: Settings > Hotkeys.",
+      joxi: "Joxi tray icon > Settings > Hotkeys.",
+      flameshot: "Flameshot always takes Print Screen. Quit it or pick another key for WellSnap.",
+    },
   },
   screenshots: {
     title: "Screenshots",
@@ -96,13 +128,15 @@ export const settings: typeof ru = {
   support: {
     title: "Support the project",
     lead:
-      "WellSnap is free, ad-free and collects no data. It is made by one person. If the app saves you time, you can help the project with any amount.",
+      "WellSnap is free and ad-free, and your screenshots, clipboard and comments are never sent anywhere. It is made by one person. If the app saves you time, you can help the project with any amount.",
     leadNoMethods:
-      "WellSnap is free, ad-free and collects no data. It is made by one person. If the app saves you time, the ways to help are below.",
+      "WellSnap is free and ad-free, and your screenshots, clipboard and comments are never sent anywhere. It is made by one person. If the app saves you time, the ways to help are below.",
     promise: "Whatever you choose, the features stay the same: nothing is locked behind a payment.",
     thanks: "Thank you for your support!",
     statsTitle: "Your stats",
-    stats: "{shots}, {marks}. These numbers stay on this computer and are never sent anywhere.",
+    stats:
+      "{shots}, {marks}. These numbers are kept on this computer. If anonymous statistics are on, only daily totals are sent, without any content.",
+    statsLocal: "{shots}, {marks}. These numbers stay on this computer and are never sent anywhere.",
     shots: { one: "{count} screenshot", few: "{count} screenshots", many: "{count} screenshots", other: "{count} screenshots" },
     marks: { one: "{count} mark", few: "{count} marks", many: "{count} marks", other: "{count} marks" },
     resetCounters: "Reset",
@@ -143,7 +177,42 @@ export const settings: typeof ru = {
     star: "Star on GitHub",
     issue: "Report a bug",
     privacy:
+      "Your screenshots, clipboard, comments, file names and window titles are never sent. By default WellSnap sends anonymous usage statistics (daily totals) to PostHog and crash reports to Sentry, to find bugs and see which features are used. Both can be turned off under Privacy. WellSnap also checks GitHub for updates shortly after start and then every 12 hours and downloads a new version when there is one (you can turn this off under About). Links open in your browser only when you click them.",
+    // Builds without telemetry (AppInfo.telemetry false).
+    privacyLocal:
       "Your screenshots and data never leave this computer. The only automatic network requests go to GitHub: the update check shortly after start and then every 12 hours, and the download of a new version when there is one. You can turn this off under About. Links open in your browser only when you click them.",
+  },
+  privacy: {
+    title: "Privacy",
+    lead: "Screenshots, clipboard, comments, file names and window titles are never sent. Crash reports and anonymous statistics help find bugs and show which features are used. You can turn both off.",
+    unavailable: "This build of WellSnap does not include reports and sends nothing.",
+    crash: "Crash reports",
+    crashAlways: "Always send",
+    crashAsk: "Ask each time",
+    crashNever: "Never",
+    crashDesc:
+      "A report contains the app and system versions, where in the code the failure happened and the last lines of the technical log. After a sudden crash it also contains a small snapshot of the program's memory, which can hold fragments of what WellSnap was working on; it is deleted after analysis. Screenshots, comments and files are never attached.",
+    crashAlwaysDesc: "Also sends errors that did not close the app.",
+    crashAskDesc: "After a crash, WellSnap asks whether to send the report.",
+    crashNeverDesc: "Crashes are not recorded and nothing is sent.",
+    stats: "Send anonymous usage statistics",
+    statsDesc:
+      "Once a day: how many screenshots were taken, which tools and buttons were used, how fast the editor opened, the app and system versions and the country. A random install number instead of your name.",
+    pending: "Reports waiting to be sent: {count}",
+    send: "Send",
+    delete: "Delete",
+    showSent: "Show what was sent",
+    hideSent: "Hide",
+    nothingSent: "Nothing has been sent yet.",
+    sentCrash: "Crash report",
+    sentError: "Error",
+    sentUsage: "Daily statistics",
+    resetId: "Reset install number",
+    resetIdDesc: "Reports and statistics use a new random number from now on.",
+    resetIdDone: "Install number reset",
+    whereTitle: "Where the data goes",
+    where:
+      "Statistics go to PostHog (USA), crash reports to Sentry (Europe). Like any website, these services see your IP address, which tells them the country. Nothing is sent before the first setup is finished.",
   },
   about: {
     title: "About",
@@ -151,7 +220,8 @@ export const settings: typeof ru = {
     version: "Version {version}",
     description:
       "Select an area, mark what matters and paste it into a chat. Several screenshots paste as one album; paste with text adds the comments.",
-    free: "Free forever, no ads, no data collection.",
+    free: "Free forever, no ads. Anonymous statistics and crash reports can be turned off under Privacy.",
+    freeLocal: "Free forever, no ads, no data collection.",
     repo: "Source code on GitHub",
     releases: "All versions and updates",
     issues: "Report a bug",
@@ -160,7 +230,7 @@ export const settings: typeof ru = {
     checkUpdates: "Check for updates",
     autoCheck: "Check for updates automatically",
     autoCheckDesc:
-      "Asks GitHub for the latest version shortly after start and then every 12 hours, and downloads a new version from there. Nothing else is sent.",
+      "Asks GitHub for the latest version shortly after start and then every 12 hours, and downloads a new version from there. Nothing else is sent with this check.",
     autoInstall: "Install updates automatically",
     autoInstallDesc:
       "The new version is downloaded and installed while you are not using the computer. WellSnap restarts in a few seconds.",

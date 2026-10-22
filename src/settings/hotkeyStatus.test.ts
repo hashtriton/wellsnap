@@ -5,8 +5,10 @@ import { captureStatus, smartPasteStatus } from "./hotkeyStatus";
 const status = (patch: Partial<HotkeyStatus>): HotkeyStatus => ({
   captureRegistered: false,
   captureError: null,
+  captureErrorKind: null,
   smartPasteRegistered: false,
   smartPasteError: null,
+  smartPasteErrorKind: null,
   ...patch,
 });
 

@@ -96,6 +96,8 @@ export const overlay: typeof ru = {
     saveFailed: "Could not save the screenshot. Try again or pick another action",
     copyFailed: "Could not copy the screenshot. Try again or pick another action",
     addFailed: "Could not add the screenshot to the set. Try again or pick another action",
+    noUpload: "WellSnap does not upload anything. Select an area, press {copy}, then paste into the chat with {paste}.",
+    editHere: "Edit right here: A arrow, R rectangle, T text, B blur. All keys: F1.",
   },
   help: {
     title: "Shortcuts",

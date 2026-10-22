@@ -9,12 +9,14 @@ import { Icon } from "../shared/ui/icons";
 import { QrCode } from "../shared/ui/QrCode";
 import { PageHead } from "./General";
 import { openLink } from "./links";
+import { privacyKeys } from "./privacyTexts";
 import type { PageProps } from "./types";
 
 type Reminders = "rare" | "never";
 
-export function Support({ t, lang, settings }: PageProps) {
+export function Support({ t, lang, settings, info }: PageProps) {
   const d = settings.donations;
+  const texts = privacyKeys(info);
   const supporter = d.status === "supporter";
   const methods = paymentMethods(lang);
   const [openFailed, setOpenFailed] = useState(false);
@@ -42,7 +44,7 @@ export function Support({ t, lang, settings }: PageProps) {
       <section className="group">
         <Row
           label={t("settings.support.statsTitle")}
-          description={t("settings.support.stats", {
+          description={t(texts.stats, {
             shots: t("settings.support.shots", { count: d.captures }),
             marks: t("settings.support.marks", { count: d.marks }),
           })}
@@ -164,7 +166,7 @@ export function Support({ t, lang, settings }: PageProps) {
       </section>
       <p className="footnote">
         <Icon name="shield" size={14} />
-        {t("settings.support.privacy")}
+        {t(texts.privacy)}
       </p>
     </>
   );

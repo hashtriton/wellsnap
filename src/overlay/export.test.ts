@@ -141,6 +141,7 @@ describe("captions in the export", () => {
       annotations: [...captioned, ...annotations.map((a) => (a.kind === "mark" ? { ...a, id: a.id + 10, num: a.num + 2 } : { ...a, id: a.id + 10 }))],
       crop: { x: 100, y: 100, w: 600, h: 400 },
       image: { width: 600, height: 400 },
+      scale: 1,
     });
     expect(meta.marks).toEqual([
       { num: 1, comment: "Кнопка не реагирует" },
@@ -154,7 +155,7 @@ describe("captions in the export", () => {
 
 describe("finishMeta", () => {
   const crop = { x: 100, y: 100, w: 600, h: 400 };
-  const base = { captureId: 7, action: "copy" as const, letter: "B", format: "png" as const, annotations, crop, image: { width: 600, height: 400 } };
+  const base = { captureId: 7, action: "copy" as const, letter: "B", format: "png" as const, annotations, crop, image: { width: 600, height: 400 }, scale: 1.5 };
 
   it("tells the core whether the comments are on the image", () => {
     expect(finishMeta({ ...base, placement: "onImage" }).commentsOnImage).toBe(true);
@@ -174,7 +175,26 @@ describe("finishMeta", () => {
       ],
       commentsOnImage: false,
       format: "png",
+      scale: 1.5,
+      tools: { mark: 2, arrow: 1 },
     });
+  });
+
+  it("counts the annotations per tool", () => {
+    expect(finishMeta({ ...base, placement: "separate", annotations: [] }).tools).toEqual({});
+    const blur: Annotation = { kind: "blur", id: 8, color: "#000", r: { x: 0, y: 0, w: 10, h: 10 }, mode: "mosaic" };
+    expect(finishMeta({ ...base, placement: "separate", annotations: [...annotations, blur, { ...blur, id: 9 }] }).tools).toEqual({
+      mark: 2,
+      arrow: 1,
+      blur: 2,
+    });
+  });
+
+  it("passes the monitor scale and the finish hint to the core", () => {
+    expect(finishMeta({ ...base, placement: "onImage", scale: 2 })).toMatchObject({ scale: 2 });
+    expect(finishMeta({ ...base, placement: "onImage" }).hint).toBeUndefined();
+    const meta = finishMeta({ ...base, placement: "onImage", hint: "noUpload" });
+    expect(JSON.parse(JSON.stringify(meta))).toMatchObject({ scale: 1.5, hint: "noUpload" });
   });
 
   it("leaves out callouts whose badge is outside the crop", () => {

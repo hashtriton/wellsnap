@@ -37,6 +37,9 @@ pub struct Snapshot {
     pub comments_on_image: bool,
     /// Bumped when the file changes so thumbnails are not served from cache.
     pub revision: u32,
+    /// Physical pixels per CSS pixel of the monitor it was taken on, so snapshots from mixed-DPI monitors can
+    /// be drawn at one visual size.
+    pub scale: f32,
 }
 
 impl Snapshot {
@@ -78,6 +81,7 @@ impl Session {
         png: &[u8],
         width: u32,
         height: u32,
+        scale: f32,
         marks: Vec<Mark>,
         comments_on_image: bool,
     ) -> std::io::Result<char> {
@@ -96,6 +100,7 @@ impl Session {
             marks: clean_marks(marks),
             comments_on_image,
             revision: 0,
+            scale,
         });
         self.changed_at = SystemTime::now();
         Ok(letter)
@@ -271,13 +276,24 @@ mod tests {
     }
 
     #[test]
+    fn scale_is_stored_and_sent_to_the_frontend() {
+        let mut s = session("scale");
+        s.add(b"png", 30, 20, 1.5, vec![], true).unwrap();
+        assert_eq!(s.get('A').unwrap().scale, 1.5);
+        let json = serde_json::to_value(s.get('A').unwrap()).unwrap();
+        assert_eq!(json["scale"], 1.5);
+        assert_eq!(json["commentsOnImage"], true);
+        assert!(json.get("path").is_none(), "the file path stays in the core");
+    }
+
+    #[test]
     fn letters_are_sequential_and_not_reused() {
         let mut s = session("letters");
-        assert_eq!(s.add(b"png", 10, 10, vec![], false).unwrap(), 'A');
-        assert_eq!(s.add(b"png", 10, 10, vec![], false).unwrap(), 'B');
+        assert_eq!(s.add(b"png", 10, 10, 1.0, vec![], false).unwrap(), 'A');
+        assert_eq!(s.add(b"png", 10, 10, 1.0, vec![], false).unwrap(), 'B');
         assert!(s.remove('B').is_some_and(|p| p.ends_with("B.png")));
         assert_eq!(s.remove('B'), None);
-        assert_eq!(s.add(b"png", 10, 10, vec![], false).unwrap(), 'C');
+        assert_eq!(s.add(b"png", 10, 10, 1.0, vec![], false).unwrap(), 'C');
         assert_eq!(s.files().len(), 2);
         assert!(s.files()[1].ends_with("C.png"));
     }
@@ -285,12 +301,12 @@ mod tests {
     #[test]
     fn a_letter_used_by_a_single_copy_is_skipped() {
         let mut s = session("skip");
-        s.add(b"png", 10, 10, vec![], false).unwrap();
-        s.add(b"png", 10, 10, vec![], false).unwrap();
+        s.add(b"png", 10, 10, 1.0, vec![], false).unwrap();
+        s.add(b"png", 10, 10, 1.0, vec![], false).unwrap();
         assert!(!s.skip_letter('D'), "not the next letter");
         assert!(s.skip_letter('C'));
         assert!(!s.skip_letter('C'), "already used");
-        assert_eq!(s.add(b"png", 10, 10, vec![], false).unwrap(), 'D');
+        assert_eq!(s.add(b"png", 10, 10, 1.0, vec![], false).unwrap(), 'D');
     }
 
     #[test]
@@ -300,7 +316,7 @@ mod tests {
         let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         let mut s = Session::new(&root, start);
         assert_eq!(s.changed_at, start);
-        s.add(b"png", 1, 1, vec![], false).unwrap();
+        s.add(b"png", 1, 1, 1.0, vec![], false).unwrap();
         assert!(s.changed_at > start);
         s.changed_at = start;
         assert!(!s.skip_letter('Z'), "a refused letter changes nothing");
@@ -318,19 +334,19 @@ mod tests {
     fn set_is_capped_at_26() {
         let mut s = session("cap");
         for _ in 0..26 {
-            s.add(b"png", 1, 1, vec![], false).unwrap();
+            s.add(b"png", 1, 1, 1.0, vec![], false).unwrap();
         }
         assert_eq!(s.next_letter(), None);
-        assert!(s.add(b"png", 1, 1, vec![], false).is_err());
+        assert!(s.add(b"png", 1, 1, 1.0, vec![], false).is_err());
         assert_eq!(s.snapshots.last().unwrap().letter, 'Z');
     }
 
     #[test]
     fn text_block_matches_the_badges() {
         let mut s = session("text");
-        s.add(b"png", 1, 1, marks(&[(1, "Кнопку ярче"), (2, "Цену  крупнее\nи жирнее")]), false).unwrap();
-        s.add(b"png", 1, 1, marks(&[(1, "")]), false).unwrap();
-        s.add(b"png", 1, 1, marks(&[(1, "Здесь текст налезает")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "Кнопку ярче"), (2, "Цену  крупнее\nи жирнее")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "Здесь текст налезает")]), false).unwrap();
         assert_eq!(
             s.text_block(Lang::Ru),
             "Снимок A\nA1 Кнопку ярче\nA2 Цену крупнее и жирнее\n\nСнимок C\nC1 Здесь текст налезает"
@@ -341,8 +357,8 @@ mod tests {
     #[test]
     fn comments_drawn_on_the_image_are_not_repeated_as_text() {
         let mut s = session("onimage");
-        s.add(b"png", 1, 1, marks(&[(1, "на картинке")]), true).unwrap();
-        s.add(b"png", 1, 1, marks(&[(1, "текстом")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "на картинке")]), true).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, "текстом")]), false).unwrap();
         assert_eq!(s.text_block(Lang::Ru), "Снимок B
 B1 текстом");
         let html = s.html_block(Lang::Ru);
@@ -352,7 +368,7 @@ B1 текстом");
     #[test]
     fn empty_text_when_no_comments() {
         let mut s = session("notext");
-        s.add(b"png", 1, 1, marks(&[(1, ""), (2, "  ")]), false).unwrap();
+        s.add(b"png", 1, 1, 1.0, marks(&[(1, ""), (2, "  ")]), false).unwrap();
         assert_eq!(s.text_block(Lang::Ru), "");
     }
 
@@ -364,7 +380,7 @@ B1 текстом");
     #[test]
     fn html_escapes_comments() {
         let mut s = session("html");
-        s.add(b"png", 3, 4, marks(&[(1, "<b>x</b> & y")]), false).unwrap();
+        s.add(b"png", 3, 4, 1.0, marks(&[(1, "<b>x</b> & y")]), false).unwrap();
         let html = s.html_block(Lang::En);
         assert!(html.contains("&lt;b&gt;x&lt;/b&gt; &amp; y"));
         assert!(html.contains("width=\"3\" height=\"4\""));
@@ -373,7 +389,7 @@ B1 текстом");
     #[test]
     fn html_embeds_pictures_without_paths() {
         let mut s = session("html-embed");
-        s.add(b"png", 3, 4, marks(&[(1, "x")]), false).unwrap();
+        s.add(b"png", 3, 4, 1.0, marks(&[(1, "x")]), false).unwrap();
         let html = s.html_block(Lang::En);
         assert!(html.contains("<img src=\"data:image/png;base64,cG5n\""));
         assert!(!html.contains("file:") && !html.contains(&*s.dir.to_string_lossy()));

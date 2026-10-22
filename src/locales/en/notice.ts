@@ -40,4 +40,13 @@ export const notice: typeof ru = {
     setCleared: "The snapshot set was cleared during the restart",
     close: "Close",
   },
+  crash: {
+    region: "Crash report",
+    title: "WellSnap closed unexpectedly",
+    body: "Send a report to the developer? It contains the app and system versions, where the failure happened and the last lines of the technical log. Screenshots, comments and files are not attached.",
+    send: "Send",
+    dontSend: "Don't send",
+    always: "Always send without asking",
+    details: "Details",
+  },
 };

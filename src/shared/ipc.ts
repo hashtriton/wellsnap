@@ -11,6 +11,32 @@ export type CommentPlacement = "onImage" | "separate";
 export type DonationStatus = "active" | "supporter" | "never";
 export type PromptOutcome = "support" | "later" | "alreadySupported" | "never" | "notSeen";
 export type Platform = "windows" | "macos" | "other";
+/** How the strip's "Copy all" and "Save all" hand over a set: files (an album in chats) or one composed picture. */
+export type SetCopyMode = "album" | "onePicture";
+/** Why a hotkey is not registered: another program holds it, WellSnap refuses it, or anything else. */
+export type HotkeyErrorKind = "taken" | "reserved" | "other";
+/** Extra meaning of a finish: "noUpload" is Lightshot's upload key (Ctrl+D), the toast explains there is no upload. */
+export type FinishHint = "noUpload";
+export type ContenderId =
+  | "oneDrive"
+  | "dropbox"
+  | "lightshot"
+  | "yandexDisk"
+  | "shareX"
+  | "greenshot"
+  | "flameshot"
+  | "snagit"
+  | "picPick"
+  | "gyazo"
+  | "screenpresso"
+  | "fastStone"
+  | "joxi";
+/** Crash reports: sent without asking, sent after a prompt, or not captured at all. */
+export type CrashMode = "always" | "ask" | "never";
+/** Crash card answers ("send", "dontSend", "always"); Settings > Privacy uses "send" and "delete". */
+export type CrashAnswer = "send" | "dontSend" | "always" | "delete";
+export type JsErrorKind = "error" | "unhandledRejection";
+export type SentKind = "crash" | "error" | "usage";
 
 export interface DonationState {
   firstRunAt: number;
@@ -47,6 +73,14 @@ export interface Settings {
   autoInstallUpdates: boolean;
   /** The user once gave Print Screen to WellSnap (Windows); kept so a reinstall can restore the take-over. */
   printScreenTakenOver: boolean;
+  /** Remembered toggle on the strip. */
+  setCopyMode: SetCopyMode;
+  /** Core-owned: fingerprint of the last startup warning about a taken capture hotkey. */
+  hotkeyWarning: string | null;
+  /** Only builds with telemetry send anything (`AppInfo.telemetry`), and only after onboarding. */
+  crashReports: CrashMode;
+  /** Anonymous daily usage totals; same conditions as `crashReports`. */
+  usageStats: boolean;
   donations: DonationState;
 }
 
@@ -93,6 +127,11 @@ export interface FinishMeta {
   /** True when the comments are drawn on the image, so they must not be repeated as clipboard text. */
   commentsOnImage: boolean;
   format: ImageFormat;
+  /** Physical px per CSS px of the capture monitor, so snapshots from mixed-DPI monitors compose at one size. */
+  scale: number;
+  hint?: FinishHint;
+  /** Annotations per drawing tool (keys from DRAW_TOOLS), for the anonymous usage counters. */
+  tools: Record<string, number>;
 }
 
 export interface Snapshot {
@@ -100,7 +139,10 @@ export interface Snapshot {
   width: number;
   height: number;
   marks: Mark[];
+  /** The comments are drawn on the image, so they are not repeated as text. */
+  commentsOnImage: boolean;
   revision: number;
+  scale: number;
 }
 
 export interface SetInfo {
@@ -110,13 +152,33 @@ export interface SetInfo {
   text: string;
   smartPasteHotkey: string;
   smartPasteRegistered: boolean;
+  copyMode: SetCopyMode;
 }
 
 export interface HotkeyStatus {
   captureRegistered: boolean;
   captureError: string | null;
+  captureErrorKind: HotkeyErrorKind | null;
   smartPasteRegistered: boolean;
   smartPasteError: string | null;
+  smartPasteErrorKind: HotkeyErrorKind | null;
+}
+
+export interface ContenderRef {
+  id: ContenderId;
+  /** Display name in the UI language. */
+  name: string;
+}
+
+/** Known screenshot tools that may hold the capture key (Windows; empty on macOS). */
+export interface ConflictReport {
+  running: ContenderRef[];
+  /** Most likely owners of a taken capture key, most likely first. */
+  suspects: ContenderRef[];
+  /** May react to the same key although WellSnap registered it. */
+  mayDouble: ContenderRef[];
+  /** Free keys to offer instead, in accelerator syntax. */
+  alternatives: string[];
 }
 
 export interface PrintScreenStatus {
@@ -135,6 +197,8 @@ export interface AppInfo {
   screenPermission: boolean;
   inputPermission: boolean;
   saveDir: string;
+  /** This build can send crash reports and statistics; otherwise it sends nothing at all. */
+  telemetry: boolean;
 }
 
 export interface UpdateInfo {
@@ -161,7 +225,48 @@ export interface UpdateStatus {
 export type NoticePayload =
   | { kind: "toast"; text: string; detail: string | null; error: boolean }
   | { kind: "nudge"; index: number; captures: number }
-  | { kind: "updated"; version: string; hasNotes: boolean; setCleared: boolean };
+  | { kind: "updated"; version: string; hasNotes: boolean; setCleared: boolean }
+  /** After a crash in "ask" mode; `count` reports are waiting. */
+  | { kind: "crashPrompt"; count: number };
+
+/** One-picture sheet the strip composes; `title` is the heading word ("Снимок" / "Screenshot"). */
+export interface SheetRequest {
+  requestId: number;
+  sessionId: string;
+  title: string;
+  /** Draw the comment lines under each snapshot. */
+  withComments: boolean;
+  snapshots: Snapshot[];
+}
+
+export interface SheetPutMeta {
+  requestId: number;
+  width: number;
+  height: number;
+  /** Too many snapshots to keep the text readable. */
+  cramped: boolean;
+}
+
+export interface JsErrorReport {
+  kind: JsErrorKind;
+  message: string;
+  stack: string | null;
+  /** `globalThis._sentryDebugIds`: script URL to debug id. */
+  debugIds: Record<string, string>;
+}
+
+export interface TelemetryStatus {
+  /** Crash reports waiting to be sent. */
+  pendingReports: number;
+}
+
+/** One line of "Show what was sent". `at` is Unix seconds. */
+export interface SentItem {
+  at: number;
+  kind: SentKind;
+  summary: string;
+  detail: string | null;
+}
 
 export const api = {
   overlayReady: (captureId: number) => invoke<void>("overlay_ready", { captureId }),
@@ -172,17 +277,28 @@ export const api = {
   logMetric: (name: string, value: number) => invoke<void>("log_metric", { name, value }),
 
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Omit<Settings, "donations">>) => invoke<Settings>("update_settings", { patch }),
+  updateSettings: (patch: Partial<Omit<Settings, "donations" | "printScreenTakenOver" | "hotkeyWarning">>) =>
+    invoke<Settings>("update_settings", { patch }),
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
   hotkeysSuspend: () => invoke<void>("hotkeys_suspend"),
   hotkeysResume: () => invoke<void>("hotkeys_resume"),
   validateHotkey: (accelerator: string) => invoke<void>("validate_hotkey", { accelerator }),
+  /** Scans the running programs for known screenshot tools (Windows). */
+  hotkeyConflicts: () => invoke<ConflictReport>("hotkey_conflicts"),
+  /** Registers the hotkeys again and returns the outcome. */
+  hotkeysRecheck: () => invoke<HotkeyStatus>("hotkeys_recheck"),
 
   getSet: () => invoke<SetInfo>("get_set"),
   setCopyAll: () => invoke<void>("set_copy_all"),
   setSaveAll: () => invoke<number>("set_save_all"),
   setClear: () => invoke<void>("set_clear"),
   setRemove: (letter: string) => invoke<void>("set_remove", { letter }),
+  /** `png` is the composed sheet; metadata travels in a header to keep the body raw. */
+  sheetPut: (png: Uint8Array, meta: SheetPutMeta) =>
+    invoke<void>("sheet_put", png, { headers: { "x-meta": encodeURIComponent(JSON.stringify(meta)) } }),
+  sheetFailed: (requestId: number, reason: string) => invoke<void>("sheet_failed", { requestId, reason }),
+  /** Called once the strip listens; returns the request that may have been sent before that. */
+  sheetPending: () => invoke<SheetRequest | null>("sheet_pending"),
   startCapture: () => invoke<void>("start_capture"),
 
   openSettings: (tab?: string) => invoke<void>("open_settings", { tab: tab ?? null }),
@@ -214,6 +330,14 @@ export const api = {
   /** Downloads, verifies and installs, then restarts the app (does not resolve on success). */
   installUpdate: () => invoke<void>("install_update"),
   hideUpdateNotes: () => invoke<void>("hide_update_notes"),
+
+  reportJsError: (report: JsErrorReport) => invoke<void>("report_js_error", { report }),
+  telemetryStatus: () => invoke<TelemetryStatus>("telemetry_status"),
+  /** The most recent uploads, newest first. */
+  telemetryHistory: () => invoke<SentItem[]>("telemetry_history"),
+  crashPromptAnswer: (answer: CrashAnswer) => invoke<void>("crash_prompt_answer", { answer }),
+  /** "Reset install number": new random ids. */
+  telemetryResetIds: () => invoke<void>("telemetry_reset_ids"),
 };
 
 export const events = {
@@ -227,6 +351,7 @@ export const events = {
   onNoticeHide: (cb: () => void) => listen("notice:hide", () => cb()),
   onSettingsTab: (cb: (tab: string) => void) => listen<string>("settings:tab", (e) => cb(e.payload)),
   onUpdateStatus: (cb: (s: UpdateStatus) => void) => listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
+  onSheetRequest: (cb: (r: SheetRequest) => void) => listen<SheetRequest>("sheet:request", (e) => cb(e.payload)),
 };
 
 /** URL of a snapshot image in the current set (served by the `wsnap` protocol). */

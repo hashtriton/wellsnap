@@ -52,6 +52,15 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # Release builds turn on crash reports and statistics; no keys here, so these builds send nothing.
+      - name: Clippy (telemetry)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --features telemetry
+
+      - name: Rust tests (telemetry)
+        working-directory: src-tauri
+        run: cargo test --features telemetry
+
       # Development happens on Windows, where the macOS code can be type-checked but not linked: link the
       # real app binary here so a missing framework symbol (ScreenCaptureKit, AppKit) fails CI.
       - name: Build

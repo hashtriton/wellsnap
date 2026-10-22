@@ -1646,7 +1646,7 @@ export class Editor {
       exported = true;
       await api.overlayFinish(
         result.bytes,
-        finishMeta({ captureId: payload.captureId, action, letter, format, placement, annotations: list, crop, image: result }),
+        finishMeta({ captureId: payload.captureId, action, letter, format, placement, annotations: list, crop, image: result, scale: this.scale }),
       );
     } catch (err) {
       // On success the core hides and resets the overlay. On failure it leaves it open with the selection,

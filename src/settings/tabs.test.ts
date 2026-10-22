@@ -37,7 +37,7 @@ describe("window strings", () => {
     ["en", en],
   ] as const) {
     it(`are clean in ${lang}`, () => {
-      const all = (["strip", "notice", "settings", "onboarding"] as const).flatMap((area) => strings(dict[area], area, []));
+      const all = (["strip", "notice", "settings", "onboarding", "overlay"] as const).flatMap((area) => strings(dict[area], area, []));
       expect(all.length).toBeGreaterThan(100);
       for (const [path, text] of all) {
         expect(text, path).not.toMatch(DASHES);

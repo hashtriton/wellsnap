@@ -3,12 +3,15 @@
 //! or broadcasts window messages is async so it runs on the async runtime instead.
 
 use crate::actions::{self, FinishMeta};
+use crate::conflicts::ConflictReport;
 use crate::donations::PromptOutcome;
 use crate::i18n::Lang;
 use crate::printscreen::{self, PrintScreenStatus};
 use crate::session::Snapshot;
-use crate::settings::Settings;
+use crate::settings::{SetCopyMode, Settings};
+use crate::sheet::{self, SheetPutMeta, SheetRequest};
 use crate::state::{AppState, HotkeyStatus};
+use crate::telemetry::{self, CrashAnswer, JsErrorReport, SentItem, TelemetryStatus};
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -32,6 +35,7 @@ pub fn overlay_ready(app: AppHandle, window: WebviewWindow, capture_id: u64) {
 pub fn overlay_cancel(app: AppHandle) {
     let finishing = app.state::<AppState>().overlay.lock().unwrap().finishing;
     if !finishing {
+        telemetry::count("captures_cancelled");
         crate::overlay::hide_all(&app);
     }
 }
@@ -55,6 +59,7 @@ pub async fn overlay_finish(app: AppHandle, window: WebviewWindow, request: Requ
 #[tauri::command]
 pub fn log_metric(window: WebviewWindow, name: String, value: f64) {
     log::info!("[metric] {} {name} = {value:.1}", window.label());
+    telemetry::metric(window.label(), &name, value);
 }
 
 #[tauri::command]
@@ -62,8 +67,9 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings()
 }
 
-/// Fields only the core writes: donation counters and the Print Screen take-over flag.
-const CORE_OWNED: &[&str] = &["donations", "printScreenTakenOver"];
+/// Fields only the core writes: donation counters, the Print Screen take-over flag and the fingerprint of the
+/// last hotkey warning.
+const CORE_OWNED: &[&str] = &["donations", "printScreenTakenOver", "hotkeyWarning"];
 
 /// Shallow merge of `patch` into the settings. Core-owned fields are not writable from here.
 #[tauri::command]
@@ -94,6 +100,9 @@ pub fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result<Setti
 fn keep_core_owned(mut merged: Settings, current: &mut Settings) -> Settings {
     merged.donations = std::mem::take(&mut current.donations);
     merged.print_screen_taken_over = current.print_screen_taken_over;
+    // The warning was about the old capture key; a new key gets its own.
+    merged.hotkey_warning =
+        if merged.capture_hotkey == current.capture_hotkey { current.hotkey_warning.take() } else { None };
     merged
 }
 
@@ -107,6 +116,11 @@ fn apply_side_effects(app: &AppHandle, before: &Settings, after: &Settings) {
     if before.hide_strip_from_capture != after.hide_strip_from_capture {
         crate::windows_ui::sync_strip(app);
     }
+    // The headings inside a sheet are in the UI language.
+    if before.set_copy_mode != after.set_copy_mode || before.language != after.language {
+        sheet::request_prewarm(app);
+    }
+    telemetry::settings_changed(app, before, after);
     crate::tray::refresh(app);
     let _ = app.emit("settings:changed", after);
 }
@@ -122,6 +136,8 @@ pub struct AppInfo {
     screen_permission: bool,
     input_permission: bool,
     save_dir: String,
+    /// This build can send crash reports and statistics (see telemetry::available).
+    telemetry: bool,
 }
 
 #[tauri::command]
@@ -136,6 +152,7 @@ pub async fn get_app_info(app: AppHandle) -> AppInfo {
         screen_permission: crate::capture::has_permission(),
         input_permission: crate::paste::can_send_input(),
         save_dir: actions::save_dir(&app).to_string_lossy().into_owned(),
+        telemetry: telemetry::available(),
     }
 }
 
@@ -154,6 +171,19 @@ pub fn validate_hotkey(accelerator: String) -> Result<(), String> {
     crate::hotkeys::validate(&accelerator)
 }
 
+/// Async: the scan lists the running processes.
+#[tauri::command]
+pub async fn hotkey_conflicts(app: AppHandle) -> ConflictReport {
+    crate::conflicts::report(&app)
+}
+
+/// Registers the hotkeys again (the other program may have let the key go) and returns the outcome.
+#[tauri::command]
+pub async fn hotkeys_recheck(app: AppHandle) -> HotkeyStatus {
+    crate::hotkeys::apply(&app);
+    crate::hotkeys::settled_status(&app)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetInfo {
@@ -163,6 +193,7 @@ pub struct SetInfo {
     text: String,
     smart_paste_hotkey: String,
     smart_paste_registered: bool,
+    copy_mode: SetCopyMode,
 }
 
 #[tauri::command]
@@ -180,6 +211,7 @@ pub fn get_set(app: AppHandle) -> SetInfo {
             text: s.text_block(lang),
             smart_paste_hotkey: settings.smart_paste_hotkey,
             smart_paste_registered: registered,
+            copy_mode: settings.set_copy_mode,
         },
         None => SetInfo {
             session_id: None,
@@ -188,6 +220,7 @@ pub fn get_set(app: AppHandle) -> SetInfo {
             text: String::new(),
             smart_paste_hotkey: settings.smart_paste_hotkey,
             smart_paste_registered: registered,
+            copy_mode: settings.set_copy_mode,
         },
     }
 }
@@ -200,6 +233,33 @@ pub async fn set_copy_all(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_save_all(app: AppHandle) -> Result<usize, String> {
     actions::save_all(&app)
+}
+
+/// Body: the composed sheet (raw PNG). Header `x-meta`: URI-encoded JSON of `SheetPutMeta`.
+#[tauri::command]
+pub async fn sheet_put(app: AppHandle, request: Request<'_>) -> Result<(), String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected a raw image body".into());
+    };
+    let meta_header = request
+        .headers()
+        .get("x-meta")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing x-meta header")?;
+    let meta_json = urlencoding::decode(meta_header).map_err(|e| e.to_string())?;
+    let meta: SheetPutMeta = serde_json::from_str(&meta_json).map_err(|e| e.to_string())?;
+    sheet::accept(&app, meta, bytes.clone())
+}
+
+#[tauri::command]
+pub fn sheet_failed(app: AppHandle, request_id: u64, reason: String) {
+    sheet::fail(&app, request_id, reason);
+}
+
+/// The strip subscribed to `sheet:request`: returns the request it may have missed while loading.
+#[tauri::command]
+pub fn sheet_pending(app: AppHandle) -> Option<SheetRequest> {
+    sheet::pending(&app)
 }
 
 #[tauri::command]
@@ -389,6 +449,32 @@ pub fn relaunch(app: AppHandle) {
     app.restart();
 }
 
+/// Telemetry commands are async: they read and write the outbox and the sent log.
+#[tauri::command]
+pub async fn report_js_error(app: AppHandle, window: WebviewWindow, report: JsErrorReport) {
+    telemetry::report_js_error(&app, window.label(), report);
+}
+
+#[tauri::command]
+pub async fn telemetry_status(app: AppHandle) -> TelemetryStatus {
+    telemetry::status(&app)
+}
+
+#[tauri::command]
+pub async fn telemetry_history(app: AppHandle) -> Vec<SentItem> {
+    telemetry::history(&app)
+}
+
+#[tauri::command]
+pub async fn crash_prompt_answer(app: AppHandle, answer: CrashAnswer) {
+    telemetry::crash_prompt_answer(&app, answer);
+}
+
+#[tauri::command]
+pub async fn telemetry_reset_ids(app: AppHandle) {
+    telemetry::reset_ids(&app);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +521,45 @@ mod tests {
         assert_eq!(merged.donations.captures, 8);
         assert!(merged.print_screen_taken_over);
         assert_eq!(merged.capture_hotkey, "Ctrl+Shift+X");
+    }
+
+    #[test]
+    fn hotkey_warning_is_kept_until_the_capture_key_changes() {
+        const SHOWN: &str = "PrintScreen|taken|oneDrive";
+        let warned = || Settings { hotkey_warning: Some(SHOWN.into()), ..Default::default() };
+        // A webview patch never clears or forges it.
+        let stale = Settings { theme: crate::settings::Theme::Dark, ..Default::default() };
+        assert_eq!(keep_core_owned(stale, &mut warned()).hotkey_warning.as_deref(), Some(SHOWN));
+        let forged = Settings { hotkey_warning: Some("x".into()), ..Default::default() };
+        assert_eq!(keep_core_owned(forged, &mut warned()).hotkey_warning.as_deref(), Some(SHOWN));
+        // A new capture key starts without a warning.
+        let changed = Settings { capture_hotkey: "Ctrl+PrintScreen".into(), ..Default::default() };
+        assert_eq!(keep_core_owned(changed, &mut warned()).hotkey_warning, None);
+    }
+
+    #[test]
+    fn set_and_app_info_carry_the_new_fields_for_ipc() {
+        let set = SetInfo {
+            session_id: None,
+            snapshots: vec![],
+            next_letter: Some('A'),
+            text: String::new(),
+            smart_paste_hotkey: String::new(),
+            smart_paste_registered: false,
+            copy_mode: SetCopyMode::OnePicture,
+        };
+        assert_eq!(serde_json::to_value(set).unwrap()["copyMode"], "onePicture");
+        let info = AppInfo {
+            version: String::new(),
+            platform: "windows",
+            lang: Lang::En,
+            hotkeys: HotkeyStatus::default(),
+            print_screen: PrintScreenStatus::default(),
+            screen_permission: true,
+            input_permission: true,
+            save_dir: String::new(),
+            telemetry: false,
+        };
+        assert_eq!(serde_json::to_value(info).unwrap()["telemetry"], false);
     }
 }

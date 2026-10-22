@@ -7,6 +7,7 @@ use crate::i18n::tr;
 use crate::session::{self, Mark, Session};
 use crate::state::{AppState, LastCopy};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -45,6 +46,14 @@ pub enum FinishAction {
     CopyAll,
 }
 
+/// Why the overlay finished the way it did, when the toast should say more than usual.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FinishHint {
+    /// Lightshot's upload key (Ctrl+D): the copy happens, and the toast explains that nothing is uploaded.
+    NoUpload,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FinishMeta {
@@ -61,6 +70,21 @@ pub struct FinishMeta {
     pub comments_on_image: bool,
     /// "png" or "jpg": the encoding of the body.
     pub format: String,
+    /// Physical pixels per CSS pixel of the capture monitor (1.0 from an overlay that does not send it).
+    #[serde(default = "one")]
+    pub scale: f32,
+    #[serde(default)]
+    #[allow(dead_code)] // Read by the noUpload toast (WP1).
+    pub hint: Option<FinishHint>,
+    /// Annotations per drawing tool, for the usage counters. Keys come from the webview: only the names in
+    /// the overlay's DRAW_TOOLS may become counters.
+    #[serde(default)]
+    #[allow(dead_code)] // Read by the usage counters (telemetry package).
+    pub tools: BTreeMap<String, u32>,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// What a successful finish reports once the overlay is gone.
@@ -97,11 +121,10 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
         }
         FinishAction::Save => save_one(app, &image, &meta.format).map(Finished::Saved),
         FinishAction::AddToSet | FinishAction::CopyAll => {
-            add_to_set(app, &image, meta.width, meta.height, meta.letter, marks.clone(), meta.comments_on_image)
-                .map(|()| match meta.action {
-                    FinishAction::CopyAll => Finished::AddedAndCopied(copy_set_to_clipboard(app)),
-                    _ => Finished::Added,
-                })
+            add_to_set(app, &image, &meta, marks.clone()).map(|()| match meta.action {
+                FinishAction::CopyAll => Finished::AddedAndCopied(copy_set_to_clipboard(app)),
+                _ => Finished::Added,
+            })
         }
     };
     let finished = match result {
@@ -251,17 +274,15 @@ pub fn save_dir(app: &AppHandle) -> std::path::PathBuf {
     export::resolve_save_dir(configured.as_deref(), app.path().desktop_dir().ok(), app.path().home_dir().ok())
 }
 
-/// Stores the snapshot; the caller runs `after_set_changed` once the overlay is hidden.
-fn add_to_set(
-    app: &AppHandle,
-    png: &[u8],
-    width: u32,
-    height: u32,
-    letter: Option<char>,
-    marks: Vec<Mark>,
-    comments_on_image: bool,
-) -> Result<(), String> {
+/// The overlay's devicePixelRatio; anything that cannot be one falls back to 1.
+fn sane_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+}
+
+/// Stores the snapshot with the cleaned `marks`; the caller runs `after_set_changed` once the overlay is hidden.
+fn add_to_set(app: &AppHandle, png: &[u8], meta: &FinishMeta, marks: Vec<Mark>) -> Result<(), String> {
     let state = app.state::<AppState>();
+    let letter = meta.letter;
     let added = {
         let mut guard = state.session.lock().unwrap();
         let session = guard.get_or_insert_with(|| Session::new(&state.paste_root, SystemTime::now()));
@@ -271,7 +292,9 @@ fn add_to_set(
         if letter.is_some() && letter != session.next_letter() {
             log::warn!("overlay drew letter {letter:?}, set expects {:?}", session.next_letter());
         }
-        session.add(png, width, height, marks, comments_on_image).map_err(|e| e.to_string())?
+        session
+            .add(png, meta.width, meta.height, sane_scale(meta.scale), marks, meta.comments_on_image)
+            .map_err(|e| e.to_string())?
     };
     log::info!("snapshot {added} added to the set");
     Ok(())
@@ -612,6 +635,33 @@ mod tests {
         assert_eq!(meta.letter, Some('B'));
         assert!(meta.comments_on_image);
         assert_eq!(meta.marks.len(), 1);
+        assert_eq!(meta.scale, 1.0, "an overlay without the field");
+        assert_eq!(meta.hint, None);
+        assert!(meta.tools.is_empty());
+    }
+
+    #[test]
+    fn finish_meta_carries_scale_hint_and_tools() {
+        let meta: FinishMeta = serde_json::from_str(
+            r#"{"captureId":4,"action":"copy","width":10,"height":20,"letter":null,"format":"png","scale":1.25,"hint":"noUpload","tools":{"arrow":2,"mark":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.scale, 1.25);
+        assert_eq!(meta.hint, Some(FinishHint::NoUpload));
+        assert_eq!(meta.tools, BTreeMap::from([("arrow".to_string(), 2), ("mark".to_string(), 1)]));
+        assert!(serde_json::from_str::<FinishMeta>(
+            r#"{"captureId":4,"action":"copy","width":10,"height":20,"letter":null,"format":"png","hint":"upload"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn scale_from_the_overlay_is_sanitized() {
+        assert_eq!(sane_scale(1.5), 1.5);
+        assert_eq!(sane_scale(0.0), 1.0);
+        assert_eq!(sane_scale(-2.0), 1.0);
+        assert_eq!(sane_scale(f32::NAN), 1.0);
+        assert_eq!(sane_scale(f32::INFINITY), 1.0);
     }
 
     #[test]

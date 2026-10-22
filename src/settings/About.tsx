@@ -7,6 +7,7 @@ import { Button, Notice, Row, Switch } from "../shared/ui/controls";
 import { Icon, type IconName } from "../shared/ui/icons";
 import { openLink } from "./links";
 import { formatDate, pickNotes, stateAfterInstallError, updateView, type LocalUpdateState } from "./notes";
+import { privacyKeys } from "./privacyTexts";
 import type { PageProps } from "./types";
 
 export function About({ t, lang, info, goTo, settings, update }: PageProps) {
@@ -56,7 +57,7 @@ export function About({ t, lang, info, goTo, settings, update }: PageProps) {
       <p className="lead">{t("settings.about.description")}</p>
       <p className="promise">
         <Icon name="shield" size={16} />
-        {t("settings.about.free")}
+        {t(privacyKeys(info).free)}
       </p>
       {recent && <WhatsNew t={t} lang={lang} version={recent.version} notes={recent.notes} />}
       <UpdateSection t={t} status={status} settings={settings} refreshStatus={refreshStatus} />

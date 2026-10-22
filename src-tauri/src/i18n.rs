@@ -96,6 +96,60 @@ pub fn tr(lang: Lang, key: &str) -> &'static str {
         } else {
             "Allow WellSnap in Settings, then reopen it"
         },
+        "toast.copiedPicture" => if ru { "Скопировано одной картинкой" } else { "Copied as one image" },
+        "toast.pictureCramped" => if ru {
+            "Снимков много: мелкий текст может не читаться. Для такого набора лучше альбом"
+        } else {
+            "Many screenshots: small text may be hard to read. An album works better for this set"
+        },
+        "toast.pictureFailed" => if ru { "Не удалось собрать картинку" } else { "Could not build the image" },
+        "tray.captureOff" => if ru {
+            "Сделать скриншот ({hotkey} не работает)"
+        } else {
+            "Take screenshot ({hotkey} is not active)"
+        },
+        "tray.fixHotkey" => if ru { "Исправить {hotkey}..." } else { "Fix {hotkey}..." },
+        "toast.hotkeyOff" => if ru { "{hotkey} не работает для WellSnap" } else { "{hotkey} does not work for WellSnap" },
+        "toast.hotkeyOffBy" => if ru {
+            "Клавишу заняла программа {app}. Как исправить: значок WellSnap в трее > «Настройки...» > «Горячие клавиши»."
+        } else {
+            "{app} is using it. To fix it: WellSnap tray icon > Settings... > Shortcuts."
+        },
+        "toast.hotkeyOffUnknown" => if ru {
+            "Клавишу заняла другая программа. Как исправить: значок WellSnap в трее > «Настройки...» > «Горячие клавиши»."
+        } else {
+            "Another app is using it. To fix it: WellSnap tray icon > Settings... > Shortcuts."
+        },
+        "toast.noUpload" => if ru {
+            "WellSnap ничего не загружает в интернет. Снимок в буфере: вставьте его в чат через {paste}."
+        } else {
+            "WellSnap does not upload anything. The screenshot is on the clipboard: paste it into the chat with {paste}."
+        },
+        "toast.pasteJoined" => if ru {
+            "Сюда вставляется одна картинка, поэтому снимки собраны в одну"
+        } else {
+            "This app takes one image at a time, so the screenshots were joined into one"
+        },
+        "toast.pasteGrouped" => if ru {
+            "{app} принимает до {max} картинок за раз, поэтому часть снимков собрана по несколько на картинку"
+        } else {
+            "{app} takes up to {max} images at a time, so some screenshots were joined into shared images"
+        },
+        "toast.pasteBuilding" => if ru { "Сборка картинки" } else { "Building the image" },
+        "toast.pasteCancelled" => if ru { "Окно сменилось, вставка отменена" } else { "The window changed, paste cancelled" },
+        "toast.pasteStopped" => if ru {
+            "Окно сменилось, вставка остановлена: вставлено {done} из {total}"
+        } else {
+            "The window changed, paste stopped: {done} of {total} pasted"
+        },
+        "toast.pasteManual" => if ru { "В терминал WellSnap сам не вставляет" } else { "WellSnap does not paste into terminals" },
+        "toast.pasteManualText" => if ru {
+            "Текст комментариев в буфере, вставьте его, если нужно"
+        } else {
+            "The comment text is in the clipboard if you need it"
+        },
+        "block.legend" => if ru { "Картинки по порядку:" } else { "Images in order:" },
+        "block.snapshots" => if ru { "Снимки" } else { "Screenshots" },
         _ => "",
     }
 }
@@ -112,6 +166,33 @@ mod tests {
         assert_eq!(Lang::from_locale(Some("en-US")), Lang::En);
         assert_eq!(Lang::from_locale(Some("de-DE")), Lang::En);
         assert_eq!(Lang::from_locale(None), Lang::En);
+    }
+
+    /// Every key of `tr`, read from this file, so a new string is checked without being listed here.
+    fn all_keys() -> Vec<&'static str> {
+        let source = include_str!("i18n.rs");
+        let start = source.find("pub fn tr(").unwrap();
+        // `lines` also drops the \r of a CRLF checkout.
+        source[start..]
+            .lines()
+            .take_while(|line| *line != "}")
+            .filter_map(|line| line.trim_start().strip_prefix('"')?.split_once("\" =>").map(|(key, _)| key))
+            .collect()
+    }
+
+    #[test]
+    fn every_key_is_translated_without_long_dashes() {
+        let keys = all_keys();
+        assert!(keys.len() > 40, "the scan found only {} keys", keys.len());
+        assert!(keys.contains(&"toast.copiedPicture") && keys.contains(&"block.snapshots"));
+        for key in keys {
+            for lang in [Lang::Ru, Lang::En] {
+                let text = tr(lang, key);
+                assert!(!text.trim().is_empty(), "{key} is empty in {lang:?}");
+                let long_dash = text.chars().any(|c| ('\u{2012}'..='\u{2015}').contains(&c));
+                assert!(!long_dash, "{key} has a long dash in {lang:?}");
+            }
+        }
     }
 
     #[test]

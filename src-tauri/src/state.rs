@@ -10,14 +10,28 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
+/// Why a hotkey is not registered, classified from the error text (conflicts::classify).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Constructed by conflicts::classify once the hotkeys use it (WP2).
+pub enum HotkeyErrorKind {
+    /// Another program holds the key.
+    Taken,
+    /// A clipboard or undo chord WellSnap refuses to take.
+    Reserved,
+    Other,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyStatus {
     pub capture_registered: bool,
     /// Human-readable reason when registration failed (e.g. taken by another app or by Snipping Tool).
     pub capture_error: Option<String>,
+    pub capture_error_kind: Option<HotkeyErrorKind>,
     pub smart_paste_registered: bool,
     pub smart_paste_error: Option<String>,
+    pub smart_paste_error_kind: Option<HotkeyErrorKind>,
 }
 
 /// The last single screenshot copied with separate comment text: smart paste can then paste the text and the
@@ -41,6 +55,9 @@ pub struct AppState {
     pub hotkeys_suspended: AtomicBool,
     /// Newer version found by the last update check, and whether it is being installed.
     pub update: Mutex<UpdatePhase>,
+    /// One-picture sheets composed by the strip webview.
+    #[allow(dead_code)] // Used by the sheet bodies (WP1).
+    pub sheets: crate::sheet::SheetJobs,
 }
 
 impl AppState {
@@ -56,6 +73,7 @@ impl AppState {
             hotkeys: Mutex::new(HotkeyStatus::default()),
             hotkeys_suspended: AtomicBool::new(false),
             update: Mutex::new(UpdatePhase::Idle),
+            sheets: crate::sheet::SheetJobs::default(),
         }
     }
 
@@ -81,5 +99,32 @@ impl AppState {
             log::error!("could not save settings: {err}");
         }
         guard.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_status_sends_the_error_kinds() {
+        let status = HotkeyStatus {
+            capture_error: Some("HotKey already registered: PrintScreen".into()),
+            capture_error_kind: Some(HotkeyErrorKind::Taken),
+            smart_paste_error_kind: Some(HotkeyErrorKind::Reserved),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({
+                "captureRegistered": false,
+                "captureError": "HotKey already registered: PrintScreen",
+                "captureErrorKind": "taken",
+                "smartPasteRegistered": false,
+                "smartPasteError": null,
+                "smartPasteErrorKind": "reserved",
+            })
+        );
+        assert_eq!(serde_json::to_value(HotkeyErrorKind::Other).unwrap(), "other");
     }
 }

@@ -40,6 +40,12 @@ export const onboarding: typeof ru = {
     accessTitle: "Accessibility",
     optional: "optional",
     accessDesc: "Needed only for paste with text: WellSnap presses {paste} in the open chat for you.",
+    telemetryTitle: "Help improve WellSnap",
+    telemetryText:
+      "WellSnap sends anonymous statistics and crash reports to find bugs and see which features are used. Screenshots, text, comments, file names and window titles are never sent.",
+    telemetryCrash: "Send crash reports",
+    telemetryStats: "Send anonymous usage statistics",
+    telemetryDetails: "Details",
   },
   tryIt: {
     title: "Give it a try",
@@ -47,6 +53,10 @@ export const onboarding: typeof ru = {
     or: "or",
     snipping:
       "{hotkey} opens the Windows Snipping Tool right now. To capture with it, go back one step and hand it to WellSnap. Meanwhile, try the button:",
+    takenBy:
+      "{hotkey} is in use by {app} right now, so WellSnap does not receive it. Go back one step to see how to fix it. Meanwhile, try the button:",
+    takenUnknown:
+      "Another app is using {hotkey} right now, so WellSnap does not receive it. Go back one step to see how to fix it. Meanwhile, try the button:",
     button: "Take screenshot",
     tipsTitle: "Handy in the editor",
     tipArrow: "arrow",

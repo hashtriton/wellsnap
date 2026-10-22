@@ -3,6 +3,7 @@ mod autostart;
 mod capture;
 mod clipboard;
 mod commands;
+mod conflicts;
 mod donations;
 mod export;
 mod hotkeys;
@@ -16,7 +17,9 @@ mod printscreen;
 mod protocol;
 mod session;
 mod settings;
+mod sheet;
 mod state;
+mod telemetry;
 mod tray;
 mod updates;
 #[cfg(windows)]
@@ -28,7 +31,8 @@ use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 pub fn run() {
-    tauri::Builder::default()
+    let _telemetry = telemetry::early_init();
+    let builder = tauri::Builder::default()
         // Must be the first plugin: a second launch focuses the running instance instead.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             windows_ui::open_settings(app, None);
@@ -37,6 +41,9 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .max_file_size(2_000_000)
+                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(
+                    telemetry::log_dispatch(),
+                )))
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -44,7 +51,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .register_asynchronous_uri_scheme_protocol("wsnap", protocol::handle)
+        .register_asynchronous_uri_scheme_protocol("wsnap", protocol::handle);
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(telemetry::web_content_terminated);
+    builder
         .on_window_event(|window, event| {
             let app = window.app_handle();
             let label = window.label();
@@ -53,6 +63,7 @@ pub fn run() {
             if label == "onboarding" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let settings = app.state::<AppState>().update_settings(|s| s.onboarding_done = true);
                 let _ = autostart::apply(app, settings.autostart);
+                telemetry::onboarding_finished(app);
             }
             // Settings closed while the hotkey recorder had them suspended: the page's own resume never runs
             // when the webview is torn down.
@@ -78,6 +89,7 @@ pub fn run() {
 
             tray::build(&handle)?;
             hotkeys::apply(&handle);
+            conflicts::start_startup_check(&handle);
             let monitors = capture::monitors(&handle);
             overlay::ensure_windows(&handle, &monitors);
             // After the windows exist: the shareable-content query must list WellSnap to exclude its windows.
@@ -91,6 +103,7 @@ pub fn run() {
             autostart::sync(&handle, &settings);
             // Startup bookkeeping (the "updated" notice) and, in release builds, the update thread.
             updates::start(&handle);
+            telemetry::start(&handle);
             if !settings.onboarding_done {
                 windows_ui::open_onboarding(&handle);
             }
@@ -116,9 +129,14 @@ pub fn run() {
             commands::hotkeys_suspend,
             commands::hotkeys_resume,
             commands::validate_hotkey,
+            commands::hotkey_conflicts,
+            commands::hotkeys_recheck,
             commands::get_set,
             commands::set_copy_all,
             commands::set_save_all,
+            commands::sheet_put,
+            commands::sheet_failed,
+            commands::sheet_pending,
             commands::set_clear,
             commands::set_remove,
             commands::start_capture,
@@ -142,14 +160,19 @@ pub fn run() {
             commands::install_update,
             commands::hide_update_notes,
             commands::relaunch,
+            commands::report_js_error,
+            commands::telemetry_status,
+            commands::telemetry_history,
+            commands::crash_prompt_answer,
+            commands::telemetry_reset_ids,
         ])
         .build(tauri::generate_context!())
         .expect("error while building WellSnap")
-        .run(|_app, event| {
+        .run(|_app, event| match event {
             // A tray app keeps running when its last window closes; only an explicit exit code quits.
-            if let RunEvent::ExitRequested { api, code: None, .. } = event {
-                api.prevent_exit();
-            }
+            RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+            RunEvent::Exit => telemetry::shutdown(),
+            _ => {}
         });
 }
 

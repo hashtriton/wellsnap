@@ -12,11 +12,11 @@ How it pastes depends on the program in front. This page lists the programs Well
 
 ## How to read the status
 
-- **Verified: date, versions.** We pasted 3, 10, 11 and 26 screenshots by hand into this version and recorded the result.
+- **Verified: date, versions.** We pasted 3, 10, 11 and 26 screenshots by hand on that system with that WellSnap version and recorded the result. The version of the program itself is not recorded; the check is of the current version on that date.
 - **On, not verified yet.** Every WellSnap build uses this rule, but it has not been checked by hand for this release yet.
 - **Not verified.** WellSnap pastes as into any unknown program: the text first, then all screenshots as files. The column "What paste with text does" shows the planned behaviour, which test builds already use.
 
-Web pages are checked in Chromium browsers (Chrome, Edge, Yandex Browser). Firefox and its forks also follow the row `gecko_engine`, so there a page counts as verified only when that row is verified too.
+Web pages are checked in Chromium browsers (Chrome, Edge, Yandex Browser). Firefox and its forks paste only the first file of a list, so there a page from the tables that takes several files gets all screenshots joined into one picture; that has not been checked by hand yet. Other pages in Firefox follow the row `gecko_engine`.
 
 The column "Plain Ctrl+V after Copy all" says what one ordinary paste gives. "Expected" means it comes from the program's source code or documentation and was not checked by hand.
 
@@ -105,7 +105,7 @@ Pages that no row above recognises follow the rule of the browser's engine.
 
 | Program | Windows / macOS | What paste with text does | Plain Ctrl+V after Copy all | Status | id |
 |---|---|---|---|---|---|
-| Firefox, LibreWolf, Waterfox, Floorp, Zen | Windows, macOS | The text, then all screenshots joined into one picture. A page from the tables above that takes several files gets one joined picture too | Only screenshot A (expected) | Not verified | `gecko_engine` |
+| Firefox, LibreWolf, Waterfox, Floorp, Zen | Windows, macOS | The text, then all screenshots joined into one picture. A page from the tables above that takes several files gets one joined picture in every build | Only screenshot A (expected) | Not verified | `gecko_engine` |
 | Any other program or page | Windows, macOS | The text, then all screenshots as files | Depends on the program | On, not verified yet | `unknown` |
 
 ## Terminals and editors
@@ -115,7 +115,7 @@ Pages that no row above recognises follow the rule of the browser's engine.
 | Notepad | Windows | Only the comment text, with a notice that the screenshots were left out. Without comments nothing is pasted and WellSnap says so | The comment text | Verified: 2026-10-22, Windows 11, WellSnap 0.1.0 | `text_editor` |
 | Notepad++ | Windows | Only the comment text, with a notice that the screenshots were left out | The comment text (expected) | Not verified | `notepad_plus_plus` |
 | TextEdit | macOS | Only the comment text, with a notice that the screenshots were left out | Not known yet | Not verified | `textedit` |
-| Windows Terminal, Command Prompt, PowerShell, mintty (Windows); WezTerm, Alacritty, Tabby, Hyper (Windows, macOS); Terminal, iTerm2, Warp, Ghostty, kitty (macOS) | Windows, macOS | Nothing is pasted: the comment text goes to the clipboard and WellSnap shows a notice. A shell may run a pasted text line by line | The comment text (expected) | On, not verified yet | `terminal` |
+| Windows Terminal, Command Prompt, PowerShell, WSL, Bash, SSH, Python and Node.js consoles, mintty, PuTTY, KiTTY, ConEmu, Xshell, MobaXterm, SecureCRT (Windows); WezTerm, Alacritty, Tabby, Hyper (Windows, macOS); Terminal, iTerm2, Warp, Ghostty, kitty (macOS) | Windows, macOS | Nothing is pasted: the comment text goes to the clipboard and WellSnap shows a notice. A shell may run a pasted text line by line | The comment text (expected) | On, not verified yet | `terminal` |
 
 ## Known limits
 

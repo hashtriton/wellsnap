@@ -1,6 +1,7 @@
 //! macOS synthetic paste (CGEventPost Cmd+V) and frontmost app detection. Posting events needs the
 //! Accessibility permission (CGPreflightPostEventAccess), which System Settings lists under Accessibility.
 
+use super::Foreground;
 use super::target::{ForegroundInfo, is_browser};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
@@ -45,11 +46,18 @@ pub fn wait_modifiers_released(timeout: Duration) -> bool {
     }
 }
 
-pub fn send_paste() -> Result<(), String> {
+/// The key code that types "v" with Command held.
+#[derive(Debug, Clone, Copy)]
+pub struct PasteKey(CGKeyCode);
+
+pub fn paste_key() -> PasteKey {
+    PasteKey(paste_keycode())
+}
+
+pub fn send_paste(PasteKey(key): PasteKey) -> Result<(), String> {
     if !CGPreflightPostEventAccess() {
         return Err("accessibility permission is missing".into());
     }
-    let key = paste_keycode();
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
     let down = CGEvent::new_keyboard_event(source.as_deref(), key, true);
     let up = CGEvent::new_keyboard_event(source.as_deref(), key, false);
@@ -172,15 +180,22 @@ mod layout {
 }
 
 /// Bundle id of the frontmost application, e.g. "ru.keepcoder.Telegram".
-pub fn foreground_app() -> Option<String> {
+pub fn foreground_id() -> Option<String> {
     autoreleasepool(|_| {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
         Some(app.bundleIdentifier()?.to_string())
     })
 }
 
+/// The id is the bundle id, read with the program in the same call; input is never refused for elevation here.
+pub fn foreground() -> Foreground {
+    let info = foreground_info();
+    let id = info.as_ref().map(|info| info.app.clone());
+    Foreground { info, id, elevated: false }
+}
+
 /// The bundle id of the frontmost application and, for a browser, the name of its front window.
-pub fn foreground_info() -> Option<ForegroundInfo> {
+fn foreground_info() -> Option<ForegroundInfo> {
     let (app, pid) = autoreleasepool(|_| {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
         Some((app.bundleIdentifier()?.to_string(), app.processIdentifier()))

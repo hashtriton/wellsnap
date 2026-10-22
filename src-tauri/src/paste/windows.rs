@@ -1,5 +1,6 @@
 //! Windows synthetic paste (SendInput) and foreground app detection.
 
+use super::Foreground;
 use super::target::{ForegroundInfo, is_browser};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -41,10 +42,18 @@ pub fn wait_modifiers_released(timeout: Duration) -> bool {
     }
 }
 
+/// Always Ctrl+V: virtual keys do not depend on the layout.
+#[derive(Debug, Clone, Copy)]
+pub struct PasteKey;
+
+pub fn paste_key() -> PasteKey {
+    PasteKey
+}
+
 /// SendInput gives no sign when User Interface Privilege Isolation drops the events (the target runs as
 /// administrator and WellSnap does not): it still reports them as inserted. Only a partial insert, for
 /// example when another thread blocks input, comes back as an error here.
-pub fn send_paste() -> Result<(), String> {
+pub fn send_paste(_key: PasteKey) -> Result<(), String> {
     let inputs = paste_inputs();
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent as usize == inputs.len() {
@@ -83,15 +92,24 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
-/// The executable of the foreground window, its lowercase path and, for a browser, the window title. One
-/// GetForegroundWindow call, so the title belongs to the same window as the executable. Store (UWP) apps report
-/// their frame host, "applicationframehost.exe".
-pub fn foreground_info() -> Option<ForegroundInfo> {
+/// One GetForegroundWindow call for the program, the id and the elevation check.
+pub fn foreground() -> Foreground {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_invalid() {
-        return None;
+        return Foreground::default();
     }
-    let path = process_path(window_pid(hwnd)?)?;
+    let pid = window_pid(hwnd);
+    Foreground {
+        info: pid.and_then(|pid| window_info(hwnd, pid)),
+        id: Some(window_id(hwnd)),
+        elevated: pid.is_some_and(is_elevated),
+    }
+}
+
+/// The executable of the window's process, its lowercase path and, for a browser, the window title. Store
+/// (UWP) apps report their frame host, "applicationframehost.exe".
+fn window_info(hwnd: HWND, pid: u32) -> Option<ForegroundInfo> {
+    let path = process_path(pid)?;
     let app = exe_name(&path)?;
     let path = path.to_lowercase();
     let title = if is_browser(&app, &path) { window_title(hwnd) } else { None };
@@ -123,18 +141,14 @@ fn process_path(pid: u32) -> Option<String> {
     }
 }
 
-/// The foreground window as an integer (HWND is not Send).
-pub fn foreground_window() -> Option<usize> {
+pub fn foreground_id() -> Option<String> {
     let hwnd = unsafe { GetForegroundWindow() };
-    (!hwnd.is_invalid()).then_some(hwnd.0 as usize)
+    (!hwnd.is_invalid()).then(|| window_id(hwnd))
 }
 
-fn foreground_pid() -> Option<u32> {
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() {
-        return None;
-    }
-    window_pid(hwnd)
+/// The window handle as text (HWND is not Send).
+fn window_id(hwnd: HWND) -> String {
+    format!("{:x}", hwnd.0 as usize)
 }
 
 fn window_pid(hwnd: HWND) -> Option<u32> {
@@ -143,9 +157,8 @@ fn window_pid(hwnd: HWND) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-/// User Interface Privilege Isolation drops our synthetic keys to such a window without any error.
-pub fn foreground_is_elevated() -> bool {
-    let Some(pid) = foreground_pid() else { return false };
+/// User Interface Privilege Isolation drops our synthetic keys to a window of such a process without any error.
+fn is_elevated(pid: u32) -> bool {
     let Ok(own) = process_integrity(unsafe { GetCurrentProcess() }) else { return false };
     let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return false };
     let target = process_integrity(process);
@@ -223,7 +236,7 @@ mod tests {
     fn foreground_info_is_consistent() {
         assert_eq!(window_title(HWND::default()), None, "no window, no title");
         // A test run may have no foreground window at all (CI); when there is one, check its shape.
-        if let Some(info) = foreground_info() {
+        if let Some(info) = foreground().info {
             assert_eq!(info.path, info.path.to_lowercase());
             assert!(info.path.ends_with(&info.app), "{} / {}", info.app, info.path);
             assert!(info.title.is_none() || is_browser(&info.app, &info.path), "titles of browsers only");

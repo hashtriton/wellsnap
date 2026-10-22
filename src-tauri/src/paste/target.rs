@@ -49,8 +49,8 @@ pub enum Engine {
 /// `Planned` row pastes like an unknown program until someone checks it by hand (actions.rs `ALLOW_PLANNED`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// Checked by hand: the date (YYYY-MM-DD) and the program, system and WellSnap versions, as the matrix
-    /// shows them.
+    /// Checked by hand: the date (YYYY-MM-DD) and the system and WellSnap versions, as the matrix shows them.
+    /// The program's own version is not recorded: it was the current one on that date.
     Verified { date: &'static str, version: &'static str },
     /// Shipped behaviour that is not checked for this release yet.
     Active,
@@ -179,7 +179,16 @@ pub static REGISTRY: &[Target] = &[
         profile: ATTACH,
         status: Planned,
     },
-    row("discord", "Discord", &[Is("discord.exe"), Is("com.hnc.discord")], &[Segment("discord")], attach(10), CHECKED_WIN),
+    // Discord's own titles end with " - Discord" ("Discord | #general | Server - Discord"); a page about Discord
+    // ("Discord - Wikipedia") names it elsewhere.
+    row(
+        "discord",
+        "Discord",
+        &[Is("discord.exe"), Is("com.hnc.discord")],
+        &[Exact("discord"), Ends(" - discord")],
+        attach(10),
+        CHECKED_WIN,
+    ),
     row(
         "slack",
         "Slack",
@@ -216,7 +225,7 @@ pub static REGISTRY: &[Target] = &[
         "eM Client",
         &[Is("mailclient.exe"), Is("com.emclient.mail.client")],
         &[],
-        // One file-list paste puts the text and every picture into the body.
+        // The text, then one file-list paste that puts every picture into the body.
         ATTACH,
         CHECKED_WIN,
     ),
@@ -329,7 +338,8 @@ pub static REGISTRY: &[Target] = &[
     row("notepad_plus_plus", "Notepad++", &[Is("notepad++.exe")], &[], Profile::of(TextOnly), Planned),
     // Rich text by default, so it may take pictures too.
     row("textedit", "TextEdit", &[Is("com.apple.textedit")], &[], Profile::of(TextOnly), Planned),
-    // A multi-line paste into a console may run its lines, so nothing is pasted there.
+    // A multi-line paste into a console may run its lines, so nothing is pasted there. A classic console window
+    // reports the program running in it, so shells and console programs are listed too.
     row(
         "terminal",
         "Terminal",
@@ -340,6 +350,21 @@ pub static REGISTRY: &[Target] = &[
             Is("pwsh.exe"),
             Is("conhost.exe"),
             Is("openconsole.exe"),
+            Is("wsl.exe"),
+            Is("bash.exe"),
+            Is("ssh.exe"),
+            Is("python.exe"),
+            Is("node.exe"),
+            Has("ubuntu"),
+            Is("debian.exe"),
+            Is("kali.exe"),
+            Is("putty.exe"),
+            Is("kitty.exe"),
+            Is("conemu.exe"),
+            Is("conemu64.exe"),
+            Is("xshell.exe"),
+            Is("mobaxterm.exe"),
+            Is("securecrt.exe"),
             Is("wezterm-gui.exe"),
             Is("alacritty.exe"),
             Is("mintty.exe"),
@@ -449,15 +474,18 @@ pub fn detect(fg: &ForegroundInfo) -> Detected {
 
 /// The target and the profile to paste with. An unknown or unusable target pastes as an unknown program,
 /// unless the browser engine has a usable rule of its own. In a Gecko browser a usable target that expects a
-/// file list gets one joined picture instead, keeping its caption limit.
+/// file list always gets one joined picture instead, keeping its caption limit: Firefox would paste only the
+/// first file, whatever the status of the `gecko_engine` row.
 pub fn effective(detected: &Detected, allow_planned: bool) -> (&'static Target, Profile) {
     let usable = |target: &Target| allow_planned || target.status != Status::Planned;
-    let gecko = by_id(GECKO_ENGINE).filter(|rule| detected.engine == Engine::Gecko && usable(rule));
-    match (Some(detected.target).filter(|t| t.id != UNKNOWN && usable(t)), gecko) {
-        (Some(target), Some(_)) => (target, first_file_only(target.profile)),
-        (Some(target), None) => (target, target.profile),
-        (None, Some(rule)) => (rule, rule.profile),
-        (None, None) => (unknown(), unknown().profile),
+    let gecko = detected.engine == Engine::Gecko;
+    match Some(detected.target).filter(|t| t.id != UNKNOWN && usable(t)) {
+        Some(target) if gecko => (target, first_file_only(target.profile)),
+        Some(target) => (target, target.profile),
+        None => match by_id(GECKO_ENGINE).filter(|rule| gecko && usable(rule)) {
+            Some(rule) => (rule, rule.profile),
+            None => (unknown(), unknown().profile),
+        },
     }
 }
 
@@ -593,6 +621,9 @@ mod tests {
         assert_eq!(native("com.github.wez.wezterm"), "terminal");
         assert_eq!(native("net.kovidgoyal.kitty"), "terminal");
         assert_eq!(native("Tabby.exe"), "terminal");
+        for console in ["wsl.exe", "ubuntu2204.exe", "bash.exe", "ssh.exe", "PuTTY.exe", "ConEmu64.exe", "Xshell.exe"] {
+            assert_eq!(native(console), "terminal", "{console}");
+        }
         assert_eq!(native("OUTLOOK.EXE"), "outlook_classic");
         assert_eq!(native("olk.exe"), "outlook_new");
         assert_eq!(native("MailClient.exe"), "emclient");
@@ -641,6 +672,10 @@ mod tests {
         assert_eq!(chrome("(1) WhatsApp - Google Chrome"), "whatsapp");
         assert_eq!(chrome("Mail - Ivan - Outlook - Google Chrome"), "outlook_web");
         assert_eq!(chrome("Notes - Google Docs - Google Chrome"), "gdocs");
+        assert_eq!(chrome("Discord | #general | Server - Discord - Google Chrome"), "discord");
+        assert_eq!(chrome("#general | Server - Discord - Google Chrome"), "discord");
+        assert_eq!(chrome("Discord - Google Chrome"), "discord");
+        assert_eq!(chrome("Discord - Wikipedia - Google Chrome"), UNKNOWN, "a page about Discord");
     }
 
     #[test]
@@ -742,6 +777,13 @@ mod tests {
         assert_eq!(effective(&gmail, true).1.class, Class::Sequential, "bitmaps paste fine in Firefox");
         let letters: Vec<char> = "ABC".chars().collect();
         assert_eq!(shape(&effective(&telegram, true).1, &letters, true, false), Shape::Picture);
+
+        // A row in use gets the joined picture in release too, while `gecko_engine` itself is planned.
+        let whatsapp = in_browser("firefox.exe", "WhatsApp \u{2014} Mozilla Firefox");
+        let (target, profile) = effective(&whatsapp, false);
+        assert_eq!((target.id, profile.class), ("whatsapp", Class::OnePicture));
+        let in_chrome = in_browser("chrome.exe", "WhatsApp - Google Chrome");
+        assert_eq!(effective(&in_chrome, false).1.class, Class::Attach);
     }
 
     #[test]

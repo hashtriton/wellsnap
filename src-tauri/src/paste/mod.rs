@@ -12,24 +12,42 @@ pub fn wait_modifiers_released(timeout: Duration) -> bool {
     platform::wait_modifiers_released(timeout)
 }
 
-/// Sends Ctrl+V (Windows) or Cmd+V (macOS) to the focused application.
-pub fn send_paste() -> Result<(), String> {
-    platform::send_paste()
+/// The key of a paste: Ctrl+V on Windows; on macOS the key that types "v" with Command in the current layout.
+pub use platform::PasteKey;
+
+/// Looked up once per smart paste, before its focus checks: on macOS the layout lookup runs on the main thread
+/// and may take a while.
+pub fn paste_key() -> PasteKey {
+    platform::paste_key()
 }
 
-/// The foreground program for `target::detect`: the executable (bundle id on macOS) and, for browsers only, the
-/// window title. The title must never be logged or stored.
-pub fn foreground_info() -> Option<target::ForegroundInfo> {
-    platform::foreground_info()
+/// Sends Ctrl+V (Windows) or Cmd+V (macOS) to the focused application.
+pub fn send_paste(key: PasteKey) -> Result<(), String> {
+    platform::send_paste(key)
+}
+
+/// The foreground window when a smart paste starts. Read from one window, so the program, the id and the
+/// elevation check cannot describe two different windows.
+#[derive(Debug, Default)]
+pub struct Foreground {
+    /// For `target::detect`: the executable (bundle id on macOS) and, for browsers only, the window title. The
+    /// title must never be logged or stored.
+    pub info: Option<target::ForegroundInfo>,
+    /// The same value `foreground_id` returns for this window.
+    pub id: Option<String>,
+    /// The window belongs to a process with a higher integrity level (runs as administrator while WellSnap does
+    /// not). Windows drops synthetic input to it silently. Always false outside Windows.
+    pub elevated: bool,
+}
+
+pub fn foreground() -> Foreground {
+    platform::foreground()
 }
 
 /// Identifies the foreground window (Windows) or app (macOS), to notice a focus change between two pastes. It
 /// cannot see a chat switched inside the same window, so it narrows the risk rather than removing it.
 pub fn foreground_id() -> Option<String> {
-    #[cfg(windows)]
-    return platform::foreground_window().map(|hwnd| format!("{hwnd:x}"));
-    #[cfg(not(windows))]
-    return platform::foreground_app();
+    platform::foreground_id()
 }
 
 /// The foreground window title without unread counters (Windows; None elsewhere), whatever program owns it: a
@@ -72,15 +90,6 @@ fn without_counters(title: &str) -> String {
     out
 }
 
-/// The foreground window belongs to a process with a higher integrity level (runs as administrator while
-/// WellSnap does not). Windows drops synthetic input to it silently. Always false outside Windows.
-pub fn foreground_is_elevated() -> bool {
-    #[cfg(windows)]
-    return platform::foreground_is_elevated();
-    #[cfg(not(windows))]
-    return false;
-}
-
 /// macOS needs the Accessibility (post events) permission for synthetic input; always true on Windows.
 pub fn can_send_input() -> bool {
     platform::can_send_input()
@@ -104,14 +113,19 @@ mod platform {
     pub fn wait_modifiers_released(_timeout: Duration) -> bool {
         true
     }
-    pub fn send_paste() -> Result<(), String> {
+    #[derive(Debug, Clone, Copy)]
+    pub struct PasteKey;
+    pub fn paste_key() -> PasteKey {
+        PasteKey
+    }
+    pub fn send_paste(_key: PasteKey) -> Result<(), String> {
         Err("unsupported platform".into())
     }
-    pub fn foreground_app() -> Option<String> {
+    pub fn foreground_id() -> Option<String> {
         None
     }
-    pub fn foreground_info() -> Option<super::target::ForegroundInfo> {
-        None
+    pub fn foreground() -> super::Foreground {
+        super::Foreground::default()
     }
     pub fn can_send_input() -> bool {
         false

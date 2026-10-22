@@ -639,7 +639,13 @@ struct Ran {
 }
 
 /// A window change stops the paste without an error; a failed clipboard write or key press is an error.
-fn run(acts: &[Act], text: &str, contents: &[PasteContent], still_there: impl Fn() -> bool) -> Result<Ran, String> {
+fn run(
+    acts: &[Act],
+    text: &str,
+    contents: &[PasteContent],
+    key: crate::paste::PasteKey,
+    still_there: impl Fn() -> bool,
+) -> Result<Ran, String> {
     let mut ran = Ran::default();
     let (mut done, mut content_put, mut pressed) = (0, false, false);
     for act in acts {
@@ -665,7 +671,7 @@ fn run(acts: &[Act], text: &str, contents: &[PasteContent], still_there: impl Fn
                 }
             }
             Act::Paste => {
-                crate::paste::send_paste()?;
+                crate::paste::send_paste(key)?;
                 done += usize::from(content_put);
                 pressed = true;
             }
@@ -836,16 +842,17 @@ fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
     if !crate::paste::wait_modifiers_released(MODIFIERS_RELEASE_TIMEOUT) {
         return Err(PasteError::new("paste_fail_modifiers_held", "release the hotkey keys and try again"));
     }
+    let foreground = crate::paste::foreground();
     // Input to a window of higher integrity is dropped without an error; leave the clipboard untouched.
-    if crate::paste::foreground_is_elevated() {
+    if foreground.elevated {
         return Err(PasteError::new(
             "paste_fail_elevated",
             "the target window runs as administrator; WellSnap cannot paste into it",
         ));
     }
-    let detected = target::detect(&crate::paste::foreground_info().unwrap_or_default());
+    let detected = target::detect(&foreground.info.unwrap_or_default());
     let (target, profile) = target::effective(&detected, ALLOW_PLANNED);
-    let window = crate::paste::foreground_id();
+    let window = foreground.id;
     let title = (TITLE_FINGERPRINT && profile.class == Class::Sequential).then(crate::paste::foreground_fingerprint);
     let still_there = || {
         crate::paste::foreground_id() == window
@@ -885,7 +892,8 @@ fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
         crate::notice::toast(app, tr(lang, "toast.pasteCancelled"));
         return Ok("paste_fail_window_changed");
     }
-    let ran = run(&acts(&decision.steps), &decision.text, &contents, still_there)?;
+    let key = crate::paste::paste_key();
+    let ran = run(&acts(&decision.steps), &decision.text, &contents, key, still_there)?;
     match notice_after(lang, &ran, target, &profile, &decision.shape, snapshots, cramped) {
         Some((text, Some(detail))) => crate::notice::toast_with_detail(app, &text, detail),
         Some((text, None)) => crate::notice::toast(app, &text),

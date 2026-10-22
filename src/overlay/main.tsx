@@ -4,10 +4,12 @@ import "../shared/theme.css";
 import "./overlay.css";
 import { createRoot } from "react-dom/client";
 import { api, events } from "../shared/ipc";
+import { installErrorReporting } from "../shared/telemetry";
 import { Editor } from "./editor";
 import { listenForFrames } from "./frame";
 import { App } from "./ui/App";
 
+installErrorReporting();
 const root = document.getElementById("root")!;
 const canvas = document.createElement("canvas");
 canvas.className = "stage";

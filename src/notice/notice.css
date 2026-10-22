@@ -1,5 +1,6 @@
-/* Notice window (transparent): 420x64 css px for toasts, 400x236 for the reminder card, 420x88 for the
-   "updated" pill (src-tauri/src/notice.rs). Content keeps an inner margin so its shadow is not clipped. */
+/* Notice window (transparent): 420x64 css px for toasts, 400x236 for the reminder card and the crash prompt,
+   420x88 for the "updated" pill (src-tauri/src/notice.rs). Content keeps an inner margin so its shadow is not
+   clipped. */
 
 :root {
   /* A dark color-scheme would give the transparent window an opaque canvas. */
@@ -212,6 +213,29 @@ body,
   color: var(--text-3);
 }
 .nudge-links .link-btn:hover {
+  color: var(--accent);
+}
+/* The crash prompt reuses the reminder card; its two links get their own line under the buttons. */
+.crash-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.crash-actions .nudge-buttons .btn {
+  height: 32px;
+}
+.crash-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.crash-links .link-btn {
+  padding: 1px 2px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.crash-links .link-btn:hover {
   color: var(--accent);
 }
 @keyframes nudge-in {

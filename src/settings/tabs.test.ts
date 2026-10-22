@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createT } from "../shared/i18n";
 import { en } from "../locales/en";
 import { ru } from "../locales/ru";
+import { MODE_DESC, SENT_KIND } from "./Privacy";
 import { parseTab, TABS } from "./tabs";
 
 describe("parseTab", () => {
@@ -12,6 +13,18 @@ describe("parseTab", () => {
     expect(parseTab("")).toBeNull();
     expect(parseTab(null)).toBeNull();
     expect(parseTab("#donate")).toBeNull();
+  });
+
+  it("has the privacy tab before about", () => {
+    expect(parseTab("#privacy")).toBe("privacy");
+    expect(TABS.indexOf("privacy")).toBe(TABS.indexOf("about") - 1);
+  });
+
+  it("has the crash mode and sent item texts of the privacy tab", () => {
+    for (const lang of ["ru", "en"] as const) {
+      const t = createT(lang);
+      for (const key of [...Object.values(MODE_DESC), ...Object.values(SENT_KIND)]) expect(t(key), key).not.toBe(key);
+    }
   });
 
   it("has a label for every tab in both languages", () => {

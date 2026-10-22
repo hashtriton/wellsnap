@@ -11,6 +11,7 @@ import { Notice } from "../shared/ui/controls";
 import { About } from "./About";
 import { General } from "./General";
 import { Hotkeys } from "./Hotkeys";
+import { Privacy } from "./Privacy";
 import { Screenshots } from "./Screenshots";
 import { Support } from "./Support";
 import { parseTab, TABS, type Tab } from "./tabs";
@@ -21,6 +22,7 @@ const ICONS: Record<Tab, IconName> = {
   hotkeys: "keyboard",
   screenshots: "image",
   support: "heart",
+  privacy: "shield",
   about: "info",
 };
 
@@ -29,6 +31,7 @@ const PAGES: Record<Tab, (p: PageProps) => ReactNode> = {
   hotkeys: Hotkeys,
   screenshots: Screenshots,
   support: Support,
+  privacy: Privacy,
   about: About,
 };
 

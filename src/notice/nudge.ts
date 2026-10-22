@@ -20,6 +20,9 @@ export function remainingAfterPause(totalMs: number, elapsedMs: number): number 
 /** The "updated" pill hides itself after this long unless the pointer or focus is on it. */
 export const UPDATED_AUTO_HIDE_MS = 8_000;
 
+/** The crash prompt hides itself after this long unless hovered; unanswered, the reports keep waiting. */
+export const CRASH_AUTO_HIDE_MS = 20_000;
+
 /**
  * Auto-hide timer that pauses while any hold (hover, focus) is on and resumes with what was left, never less
  * than `NUDGE_RESUME_MIN_MS`.

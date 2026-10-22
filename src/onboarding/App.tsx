@@ -167,6 +167,7 @@ function Setup({
             </Row>
           </div>
         )}
+        {settings && info?.telemetry && <TelemetryCard t={t} settings={settings} update={update} />}
         <div className="card">
           <div className="card-head">
             <span className="card-icon">
@@ -179,6 +180,49 @@ function Setup({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Crash reports and statistics are on by default; nothing is sent before onboarding closes, so this card is where
+ * every user sees both switches first. The crash switch maps to "always" and "never"; "ask" is in Settings.
+ */
+function TelemetryCard({
+  t,
+  settings,
+  update,
+}: {
+  t: TFunction;
+  settings: Settings;
+  update: (patch: SettingsPatch) => Promise<boolean>;
+}) {
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="card-icon">
+          <Icon name="shield" />
+        </span>
+        <h3 className="card-title">{t("onboarding.setup.telemetryTitle")}</h3>
+      </div>
+      <p className="card-text">{t("onboarding.setup.telemetryText")}</p>
+      <Row label={t("onboarding.setup.telemetryCrash")}>
+        {({ labelId }) => (
+          <Switch
+            labelledBy={labelId}
+            checked={settings.crashReports !== "never"}
+            onChange={(on) => update({ crashReports: on ? "always" : "never" })}
+          />
+        )}
+      </Row>
+      <Row label={t("onboarding.setup.telemetryStats")}>
+        {({ labelId }) => (
+          <Switch labelledBy={labelId} checked={settings.usageStats} onChange={(usageStats) => update({ usageStats })} />
+        )}
+      </Row>
+      <button type="button" className="link-btn" onClick={() => api.openSettings("privacy").catch(() => undefined)}>
+        {t("onboarding.setup.telemetryDetails")}
+      </button>
+    </div>
   );
 }
 

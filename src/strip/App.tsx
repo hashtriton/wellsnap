@@ -57,9 +57,11 @@ export function App() {
   const copyMode = set?.copyMode ?? "album";
   const picture = copyMode === "onePicture";
 
+  // Copy all and Save all read the mode from the settings, so they wait for a toggle that is still being saved.
+  const modeSaved = useRef<Promise<unknown>>(Promise.resolve());
   const changeMode = (mode: SetCopyMode) => {
     setSet((s) => (s ? { ...s, copyMode: mode } : s));
-    api.updateSettings({ setCopyMode: mode }).catch(refresh);
+    modeSaved.current = api.updateSettings({ setCopyMode: mode }).catch(refresh);
   };
 
   useEffect(() => {
@@ -70,6 +72,7 @@ export function App() {
     setBusy(kind);
     setFailed(false);
     try {
+      await modeSaved.current;
       await action();
     } catch {
       setFailed(true);

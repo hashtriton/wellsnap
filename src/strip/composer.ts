@@ -64,6 +64,7 @@ async function answer(request: SheetRequest, deps: ComposerDeps): Promise<void> 
     await deps.put(bytes, { requestId: request.requestId, width: plan.width, height: plan.height, cramped: plan.cramped });
     deps.metric("sheet.ms", performance.now() - started).catch(() => undefined);
   } catch (err) {
+    // Also after a refused put: the core has usually ended the request then, and ignores this repeat.
     await deps.fail(request.requestId, err instanceof Error ? err.message : String(err)).catch(() => undefined);
   }
 }

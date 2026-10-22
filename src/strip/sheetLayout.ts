@@ -19,6 +19,9 @@ const SEARCH_STEPS = 12;
 const COLUMN_TIE = 1.02;
 /** Comment column of a small crop, in body sizes, so a comment does not wrap after every word. */
 const MIN_TEXT_WIDTH = 16;
+/** Wider comment columns, in body sizes, for a set whose comments do not fit the narrow ones: below the
+ * legibility floor the body font stops shrinking at 16 px, so only a wider column can make the text shorter. */
+const WIDE_TEXT_WIDTHS = [32, 64, 128];
 
 export const SHEET_BACKGROUND = "#FFFFFF";
 export const SHEET_BORDER = "#DFE3EA";
@@ -98,11 +101,11 @@ function saneScale(scale: number): number {
 }
 
 /** Positions inside the cell (top left at 0, 0) and the cell's size. */
-function layoutCell(item: Item, f: number, s: Sizes, measure: Measure) {
+function layoutCell(item: Item, f: number, s: Sizes, textWidth: number, measure: Measure) {
   const w = Math.max(1, Math.round(item.baseW * f));
   const h = Math.max(1, Math.round(item.baseH * f));
   const hasText = item.comments.length > 0;
-  const width = Math.ceil(Math.max(w, measure(item.heading, s.headFont), hasText ? MIN_TEXT_WIDTH * s.body : 0));
+  const width = Math.ceil(Math.max(w, measure(item.heading, s.headFont), hasText ? textWidth * s.body : 0));
   const imageY = s.headLine + Math.round(0.5 * s.body);
   const lines: SheetText[] = [];
   let y = imageY + h + Math.round(0.6 * s.body);
@@ -118,9 +121,9 @@ function layoutCell(item: Item, f: number, s: Sizes, measure: Measure) {
   return { width, height, image: { x: 0, y: imageY, w, h }, lines };
 }
 
-function layout(items: Item[], cols: number, f: number, sMin: number, measure: Measure): Omit<SheetPlan, "cramped"> {
+function layout(items: Item[], cols: number, f: number, sMin: number, textWidth: number, measure: Measure): Omit<SheetPlan, "cramped"> {
   const s = sizes(sMin, f);
-  const cells = items.map((item) => layoutCell(item, f, s, measure));
+  const cells = items.map((item) => layoutCell(item, f, s, textWidth, measure));
   const rows = Math.ceil(items.length / cols);
   const colW = Array.from({ length: cols }, (_, c) => Math.max(0, ...cells.filter((_, i) => i % cols === c).map((x) => x.width)));
   const rowH = Array.from({ length: rows }, (_, r) => Math.max(0, ...cells.slice(r * cols, (r + 1) * cols).map((x) => x.height)));
@@ -159,7 +162,8 @@ export function fitsHard(p: Box): boolean {
 /**
  * Plans the sheet: for each column count the largest factor under the soft cap; when that makes the
  * screenshots' text smaller than E_MIN, the factor that keeps E_MIN under the hard cap (smallest long side);
- * when even that does not fit, the largest factor under the hard cap, marked cramped.
+ * when even that does not fit, the largest factor under the hard cap, marked cramped. The last two may widen
+ * the comment column; only text that does not fit even the widest one throws.
  */
 export function planSheet(snapshots: readonly Snapshot[], opts: SheetOptions): SheetPlan {
   if (snapshots.length === 0) throw new Error("no snapshots to compose");
@@ -173,42 +177,48 @@ export function planSheet(snapshots: readonly Snapshot[], opts: SheetOptions): S
         : [];
     return { letter: s.letter, baseW: s.width * k, baseH: s.height * k, heading: `${opts.title} ${s.letter}`, comments };
   });
-  const at = (cols: number, f: number) => layout(items, cols, f, sMin, opts.measure);
+  const at = (cols: number, f: number, textWidth = MIN_TEXT_WIDTH) => layout(items, cols, f, sMin, textWidth, opts.measure);
   const colCounts = Array.from({ length: Math.min(items.length, MAX_COLS) }, (_, i) => i + 1);
+  // Narrow first, so a wider column wins only by fitting where a narrow one does not, or a larger factor.
+  const textWidths = items.some((item) => item.comments.length > 0) ? [MIN_TEXT_WIDTH, ...WIDE_TEXT_WIDTHS] : [MIN_TEXT_WIDTH];
 
   /** Largest f in (0, 1] that fits; 0 when none does. */
-  const largest = (cols: number, fits: (p: Box) => boolean): number => {
-    if (fits(at(cols, 1))) return 1;
+  const largest = (cols: number, fits: (p: Box) => boolean, textWidth: number): number => {
+    if (fits(at(cols, 1, textWidth))) return 1;
     let lo = 0;
     let hi = 1;
     for (let i = 0; i < SEARCH_STEPS; i++) {
       const mid = (lo + hi) / 2;
-      if (fits(at(cols, mid))) lo = mid;
+      if (fits(at(cols, mid, textWidth))) lo = mid;
       else hi = mid;
     }
     return lo;
   };
-  const best = (fits: (p: Box) => boolean) => {
-    let found = { cols: 1, f: 0 };
-    for (const cols of colCounts) {
-      const f = largest(cols, fits);
-      if (f > found.f * COLUMN_TIE) found = { cols, f };
+  const best = (fits: (p: Box) => boolean, widths: number[]) => {
+    let found = { cols: 1, f: 0, textWidth: MIN_TEXT_WIDTH };
+    for (const textWidth of widths) {
+      for (const cols of colCounts) {
+        const f = largest(cols, fits, textWidth);
+        if (f > found.f * COLUMN_TIE) found = { cols, f, textWidth };
+      }
     }
     return found;
   };
 
-  const soft = best(fitsSoft);
+  const soft = best(fitsSoft, [MIN_TEXT_WIDTH]);
   if (soft.f > 0 && sMin * soft.f >= E_MIN) return { ...at(soft.cols, soft.f), cramped: false };
 
   const target = Math.min(1, E_MIN / sMin);
   let legible: Omit<SheetPlan, "cramped"> | null = null;
-  for (const cols of colCounts) {
-    const p = at(cols, target);
-    if (fitsHard(p) && (!legible || Math.max(p.width, p.height) < Math.max(legible.width, legible.height))) legible = p;
+  for (const textWidth of textWidths) {
+    for (const cols of colCounts) {
+      const p = at(cols, target, textWidth);
+      if (fitsHard(p) && (!legible || Math.max(p.width, p.height) < Math.max(legible.width, legible.height))) legible = p;
+    }
   }
   if (legible) return { ...legible, cramped: false };
 
-  const hard = best(fitsHard);
+  const hard = best(fitsHard, textWidths);
   if (hard.f === 0) throw new Error("too much text for one picture");
-  return { ...at(hard.cols, hard.f), cramped: true };
+  return { ...at(hard.cols, hard.f, hard.textWidth), cramped: true };
 }

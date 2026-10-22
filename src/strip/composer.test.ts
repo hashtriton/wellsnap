@@ -157,6 +157,16 @@ describe("startComposer", () => {
     expect(deps.put).not.toHaveBeenCalled();
   });
 
+  it("reports a put the core refused, so no waiter sits out the timeout", async () => {
+    const { deps, send } = fakeDeps();
+    deps.put.mockRejectedValueOnce(new Error("the set changed"));
+    startComposer(deps);
+    await flush();
+    send(request(4));
+    await vi.waitFor(() => expect(deps.fail).toHaveBeenCalledWith(4, "the set changed"));
+    expect(deps.metric).not.toHaveBeenCalled();
+  });
+
   it("ignores a request that is not newer than the last one", async () => {
     const { deps, send } = fakeDeps(request(7));
     startComposer(deps);

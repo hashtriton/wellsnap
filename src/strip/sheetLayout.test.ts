@@ -94,6 +94,21 @@ describe("planSheet: text", () => {
     expect(p.cells[1].lines).toEqual([]);
   });
 
+  it("widens the comment column when a full set has too much text for narrow columns", () => {
+    const comment = "Поле ввода съезжает вниз при открытой клавиатуре и закрывает кнопку отправки формы. ".repeat(5);
+    const snapshots = letters(26).map((l) => snap(l, 1920, 1080, { marks: marks(comment, comment, comment) }));
+    const p = plan(snapshots);
+    expect(p.cramped).toBe(true);
+    expect(fitsHard(p)).toBe(true);
+    const textLines = p.cells[0].lines.filter((l) => !l.font.startsWith("700"));
+    expect(textLines.map((l) => l.text).join(" ")).toBe([comment, comment, comment].map((c) => c.trim()).join(" "));
+    for (const c of p.cells) for (const l of c.lines) expect(l.y + l.height).toBeLessThanOrEqual(p.height);
+  });
+
+  it("gives up only when the text does not fit even one wide column", () => {
+    expect(() => plan([snap("A", 1920, 1080, { marks: marks("слово ".repeat(16000)) })])).toThrow("too much text for one picture");
+  });
+
   it("gives a small crop a readable comment column and wraps long comments inside it", () => {
     const long = "Этот текст налезает на соседнюю кнопку и не помещается в одну строку при такой ширине колонки";
     const p = plan([snap("A", 100, 50, { marks: marks(long) })]);

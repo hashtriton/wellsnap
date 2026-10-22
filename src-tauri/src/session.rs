@@ -165,7 +165,8 @@ impl Session {
         self.html_with_limit(lang, HTML_IMAGES_MAX_BYTES).0
     }
 
-    /// `html_block` and whether the pictures are in it (false when the set is too large to embed them).
+    /// `html_block` and whether every picture is in it (false when the set is too large to embed them, or a
+    /// file could not be read).
     #[allow(dead_code)] // Used by smart paste's rich-HTML targets (WP4b).
     pub fn html_block_with_images(&self, lang: Lang) -> (String, bool) {
         self.html_with_limit(lang, HTML_IMAGES_MAX_BYTES)
@@ -176,10 +177,13 @@ impl Session {
         let title = tr(lang, "block.snapshot");
         let total: u64 = self.snapshots.iter().map(|s| fs::metadata(&s.path).map_or(0, |m| m.len())).sum();
         let embed = usize::try_from(total).is_ok_and(|total| total.div_ceil(3) * 4 <= limit);
+        let mut complete = embed && !self.snapshots.is_empty();
         let mut html = String::new();
         for snap in &self.snapshots {
             html.push_str(&format!("<p><b>{title} {}</b></p>", snap.letter));
-            if let Some(png) = embed.then(|| fs::read(&snap.path).ok()).flatten() {
+            let png = embed.then(|| fs::read(&snap.path).ok()).flatten();
+            complete &= png.is_some();
+            if let Some(png) = png {
                 html.push_str(&format!(
                     "<p><img src=\"data:image/png;base64,{}\" width=\"{}\" height=\"{}\" alt=\"{title} {}\"></p>",
                     base64(&png),
@@ -196,7 +200,7 @@ impl Session {
                 html.push_str(&format!("<ul>{}</ul>", items.join("")));
             }
         }
-        (html, embed && !self.snapshots.is_empty())
+        (html, complete)
     }
 }
 
@@ -417,6 +421,11 @@ B1 текстом");
         assert!(full.contains("<img") && embedded);
         assert_eq!(s.html_block_with_images(Lang::En), (s.html_block(Lang::En), true));
         assert_eq!(session("html-empty").html_block_with_images(Lang::En), (String::new(), false));
+        // A file gone from the cache: the HTML lacks its picture, so it is not complete.
+        s.add(b"png", 1, 1, 1.0, vec![], false).unwrap();
+        fs::remove_file(&s.get('B').unwrap().path).unwrap();
+        let (partial, embedded) = s.html_block_with_images(Lang::En);
+        assert!(partial.contains("<img") && partial.contains("Screenshot B") && !embedded);
     }
 
     #[test]

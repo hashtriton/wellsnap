@@ -294,6 +294,13 @@ impl SheetJobs {
         Some(Settled { evicted, prewarm })
     }
 
+    /// A prewarm skipped a sheet and the slot is free, but no `finish` took the flag: the request it waited for
+    /// timed out. Takes the flag, and the caller runs the prewarm.
+    fn prewarm_due(&self) -> bool {
+        let mut inner = self.lock();
+        inner.inflight.is_none() && std::mem::take(&mut inner.prewarm_wanted)
+    }
+
     fn pending(&self, timeout: Duration) -> Option<SheetRequest> {
         let mut inner = self.lock();
         if inner.expire(timeout) {
@@ -320,7 +327,9 @@ pub fn ensure(app: &AppHandle, letters: Option<&[char]>, with_comments: bool) ->
         let session = guard.as_ref().filter(|s| !s.is_empty()).ok_or("the set is empty")?;
         select(session, letters, with_comments, title)?
     };
-    state.sheets.obtain(key, snapshots, SHEET_TIMEOUT, |request| send(app, request))
+    let sheet = state.sheets.obtain(key, snapshots, SHEET_TIMEOUT, |request| send(app, request));
+    prewarm_if_due(app);
+    sheet
 }
 
 /// Builds the sheets the next copy will need, without waiting. Only in one-picture mode.
@@ -351,38 +360,34 @@ pub fn request_prewarm(app: &AppHandle) {
 /// A sheet from the strip (`sheet_put`).
 pub fn accept(app: &AppHandle, meta: SheetPutMeta, png: Vec<u8>) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let (session_id, letters) = state
-        .sheets
-        .inflight(meta.request_id)
-        .ok_or_else(|| format!("sheet request {} is not in flight", meta.request_id))?;
-    let stored = check_png(&png, &meta).and_then(|()| {
-        let dir = {
-            let guard = state.session.lock().unwrap();
-            still_current(guard.as_ref(), &session_id, &letters)?
-        };
-        store(&dir, meta.request_id, &letters, png, &meta)
-    });
-    let error = stored.as_ref().err().cloned();
-    if let Some(err) = &error {
-        log::warn!("sheet {} refused: {err}", meta.request_id);
-    }
-    if let Some(settled) = state.sheets.finish(meta.request_id, stored) {
+    let (result, settled) = take_put(&state.sheets, &state.session, &meta, png);
+    if let Some(settled) = settled {
         after_finish(app, settled);
     }
-    error.map_or(Ok(()), Err)
+    result
 }
 
 /// The strip could not compose the request (`sheet_failed`).
 pub fn fail(app: &AppHandle, request_id: u64, reason: String) {
-    log::warn!("sheet {request_id} failed in the strip: {reason}");
-    if let Some(settled) = app.state::<AppState>().sheets.finish(request_id, Err(reason)) {
-        after_finish(app, settled);
+    let message = format!("sheet {request_id} failed in the strip: {reason}");
+    match app.state::<AppState>().sheets.finish(request_id, Err(reason)) {
+        Some(settled) => {
+            log::warn!("{message}");
+            after_finish(app, settled);
+        }
+        // The strip also reports a put the core refused, and that already ended the request.
+        None => log::debug!("{message} (not in flight)"),
     }
 }
 
 /// The request in flight, for a strip that loaded after it was sent (`sheet_pending`).
 pub fn pending(app: &AppHandle) -> Option<SheetRequest> {
-    app.state::<AppState>().sheets.pending(SHEET_TIMEOUT)
+    let request = app.state::<AppState>().sheets.pending(SHEET_TIMEOUT);
+    // The strip has subscribed by now, so a prewarm started here reaches it as an event.
+    if request.is_none() {
+        prewarm_if_due(app);
+    }
+    request
 }
 
 /// "A-F" for a range, "A" for one snapshot: used in the sheet's file names.
@@ -391,6 +396,48 @@ pub fn letter_range(letters: &[char]) -> String {
         (Some(first), Some(last)) if first != last => format!("{first}-{last}"),
         (Some(first), _) => first.to_string(),
         _ => String::new(),
+    }
+}
+
+/// `accept` without the app: checks the put against its request and the set, stores it and ends the request.
+fn take_put(
+    jobs: &SheetJobs,
+    session: &Mutex<Option<Session>>,
+    meta: &SheetPutMeta,
+    png: Vec<u8>,
+) -> (Result<(), String>, Option<Settled>) {
+    let id = meta.request_id;
+    let Some((session_id, letters)) = jobs.inflight(id) else {
+        return (Err(format!("sheet request {id} is not in flight")), None);
+    };
+    let stored = check_png(&png, meta).and_then(|()| {
+        let dir = still_current(session.lock().unwrap().as_ref(), &session_id, &letters)?;
+        store(&dir, id, &letters, png, meta)
+    });
+    conclude(jobs, id, stored)
+}
+
+/// Ends request `id` with what the put produced. A request that ended while the file was written (it timed
+/// out) refuses the sheet, and its folder goes at once: nothing else knows it.
+fn conclude(jobs: &SheetJobs, id: u64, stored: Result<Sheet, String>) -> (Result<(), String>, Option<Settled>) {
+    let error = stored.as_ref().err().cloned();
+    let folder = stored.as_ref().ok().and_then(|sheet| sheet.path.parent().map(Path::to_path_buf));
+    let Some(settled) = jobs.finish(id, stored) else {
+        log::warn!("sheet {id} came after its request ended");
+        if let Some(folder) = folder {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+        return (Err(format!("sheet request {id} is not in flight")), None);
+    };
+    if let Some(err) = &error {
+        log::warn!("sheet {id} refused: {err}");
+    }
+    (error.map_or(Ok(()), Err), Some(settled))
+}
+
+fn prewarm_if_due(app: &AppHandle) {
+    if app.state::<AppState>().sheets.prewarm_due() {
+        request_prewarm(app);
     }
 }
 
@@ -601,6 +648,65 @@ mod tests {
     }
 
     #[test]
+    fn a_put_is_checked_stored_and_ends_its_request() {
+        let mut s = temp_session("put");
+        s.add(b"png", 10, 10, 1.0, vec![], false).unwrap();
+        let k = Key { session_id: s.id.clone(), ..key("", "A") };
+        let path = sheet_path(&s.dir, 2, &['A']);
+        let session = Mutex::new(Some(s));
+        let jobs = SheetJobs::default();
+        let (result, settled) = take_put(&jobs, &session, &meta(1, 4, 2), png_header(4, 2));
+        assert_eq!((result, settled), (Err("sheet request 1 is not in flight".into()), None));
+
+        let id = jobs.lock().start(k.clone(), vec![]).request_id;
+        let (result, settled) = take_put(&jobs, &session, &meta(id, 4, 3), png_header(4, 2));
+        assert!(result.unwrap_err().contains("announced"));
+        assert_eq!(settled, Some(Settled::default()), "a refused put ends the request");
+        assert!(jobs.lock().failed.contains(&k));
+
+        let id = jobs.lock().start(k.clone(), vec![]).request_id;
+        let (result, settled) = take_put(&jobs, &session, &meta(id, 4, 2), png_header(4, 2));
+        assert_eq!((result, settled), (Ok(()), Some(Settled::default())));
+        assert_eq!(jobs.lock().cached(&k).unwrap().path, path);
+        assert_eq!(std::fs::read(&path).unwrap(), png_header(4, 2));
+        assert!(!jobs.lock().failed.contains(&k));
+
+        let id = jobs.lock().start(Key { items: vec![('A', 0), ('B', 0)], ..k }, vec![]).request_id;
+        let (result, _) = take_put(&jobs, &session, &meta(id, 4, 2), png_header(4, 2));
+        assert!(result.unwrap_err().contains("snapshot B"), "a letter the set does not hold");
+        session.lock().unwrap().take();
+        let id = jobs.lock().start(key("other", "A"), vec![]).request_id;
+        let (result, _) = take_put(&jobs, &session, &meta(id, 4, 2), png_header(4, 2));
+        assert_eq!(result, Err("the set changed".into()));
+    }
+
+    #[test]
+    fn a_sheet_stored_after_its_request_ended_is_refused_and_removed() {
+        let s = temp_session("late");
+        let stored = store(&s.dir, 9, &['A'], png_header(4, 2), &meta(9, 4, 2)).unwrap();
+        let folder = stored.path.parent().unwrap().to_path_buf();
+        assert!(folder.exists());
+        let jobs = SheetJobs::default();
+        let (result, settled) = conclude(&jobs, 9, Ok(stored));
+        assert_eq!((result, settled), (Err("sheet request 9 is not in flight".into()), None));
+        assert!(!folder.exists());
+        assert!(jobs.lock().cache.is_empty());
+    }
+
+    #[test]
+    fn a_prewarm_left_behind_by_a_timeout_is_due_once_the_slot_frees() {
+        let jobs = SheetJobs::default();
+        let with = key("s1", "AB");
+        let without = Key { with_comments: false, ..with.clone() };
+        jobs.prewarm(vec![(with, vec![]), (without, vec![])], SHORT, |_| ());
+        assert!(!jobs.prewarm_due(), "the first sheet is still in flight");
+        std::thread::sleep(SHORT);
+        assert!(jobs.pending(SHORT).is_none(), "timed out");
+        assert!(jobs.prewarm_due());
+        assert!(!jobs.prewarm_due(), "taken once");
+    }
+
+    #[test]
     fn only_the_request_in_flight_is_accepted() {
         let jobs = SheetJobs::default();
         assert_eq!(jobs.inflight(1), None);
@@ -704,13 +810,13 @@ mod tests {
     fn a_request_nobody_answers_gives_up_its_slot() {
         let jobs = SheetJobs::default();
         // A prewarm has no waiter of its own; the next caller frees its slot once it is older than the timeout.
-        jobs.prewarm(vec![(key("s1", "A"), vec![])], SHEET_TIMEOUT, |_| ());
         let started = Instant::now();
+        jobs.prewarm(vec![(key("s1", "A"), vec![])], SHEET_TIMEOUT, |_| ());
         let mut sent = vec![];
         let result = jobs.obtain(key("s1", "AB"), vec![], SHORT, |r| sent.push(r.request_id));
         assert_eq!(sent, vec![2], "sent once the prewarm expired");
         assert!(result.unwrap_err().contains("in time"));
-        assert!(started.elapsed() >= SHORT + SHORT / 2, "waited for the prewarm, then for its own request");
+        assert!(started.elapsed() >= SHORT * 2, "waited for the prewarm, then for its own request");
     }
 
     #[test]

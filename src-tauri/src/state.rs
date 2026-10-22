@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 /// Why a hotkey is not registered, classified from the error text (conflicts::classify).
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // Constructed by conflicts::classify once the hotkeys use it (WP2).
 pub enum HotkeyErrorKind {
     /// Another program holds the key.
     Taken,

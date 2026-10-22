@@ -112,12 +112,20 @@ fn apply_now(app: &AppHandle) {
             }
         }
     }
+    status.capture_error_kind = status.capture_error.as_deref().map(crate::conflicts::classify);
+    status.smart_paste_error_kind = status.smart_paste_error.as_deref().map(crate::conflicts::classify);
     publish(app, status);
 }
 
 fn publish(app: &AppHandle, status: HotkeyStatus) {
-    *app.state::<AppState>().hotkeys.lock().unwrap() = status.clone();
+    let previous = std::mem::replace(&mut *app.state::<AppState>().hotkeys.lock().unwrap(), status.clone());
     let _ = app.emit("hotkeys:status", &status);
+    // The tray shows whether capture works. Suspending publishes a status without an error, so the tray does not
+    // call the key broken while Settings records a new one. After the lock is released: menu calls must not run
+    // under an AppState lock (tray.rs).
+    if crate::tray::capture_off(&previous) != crate::tray::capture_off(&status) {
+        crate::tray::refresh(app);
+    }
 }
 
 /// The platform's clipboard and undo chords (Ctrl or Cmd with V, C, X, A, Z, Y). As a global hotkey they would

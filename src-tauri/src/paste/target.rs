@@ -6,6 +6,8 @@
 //! same status; the `matrix_matches_registry` test checks that.
 #![allow(dead_code)] // Until WP4b moves smart paste in actions.rs onto `detect` and `effective`.
 
+use std::fmt;
+
 use super::plan::{Class, Profile};
 use crate::i18n::Lang;
 use App::{Has, Is};
@@ -14,7 +16,7 @@ use Match::{Contains, Ends, Exact, Segment};
 use Status::{Active, Planned};
 
 /// The foreground program, as the platform code sees it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ForegroundInfo {
     /// Executable name (Windows, e.g. "telegram.exe") or bundle id (macOS).
     pub app: String,
@@ -22,6 +24,17 @@ pub struct ForegroundInfo {
     pub path: String,
     /// Window title, read for browsers only.
     pub title: Option<String>,
+}
+
+/// Leaves the title out, so that a `{:?}` in a log line or a failed assertion never writes it down.
+impl fmt::Debug for ForegroundInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForegroundInfo")
+            .field("app", &self.app)
+            .field("path", &self.path)
+            .field("has_title", &self.title.is_some())
+            .finish()
+    }
 }
 
 /// The page engine of a browser; `Native` for every other program.
@@ -245,8 +258,22 @@ pub static REGISTRY: &[Target] = &[
     row("instagram", "Instagram", &[], &[Segment("instagram")], Profile::DEFAULT, Planned),
     row("threads", "Threads", &[], &[Segment("threads")], attach(20), Planned),
     row("reddit", "Reddit", &[], &[Segment("reddit")], attach(20), Planned),
-    row("pikabu", "Пикабу", &[], &[Segment("пикабу")], Profile::of(OnePicture), Planned),
-    row("habr", "Хабр", &[], &[Segment("хабр"), Segment("habr")], Profile::of(OnePicture), Planned),
+    Target {
+        id: "pikabu",
+        name: ("Пикабу", "Pikabu"),
+        apps: &[],
+        titles: &[Segment("пикабу")],
+        profile: Profile::of(OnePicture),
+        status: Planned,
+    },
+    Target {
+        id: "habr",
+        name: ("Хабр", "Habr"),
+        apps: &[],
+        titles: &[Segment("хабр"), Segment("habr")],
+        profile: Profile::of(OnePicture),
+        status: Planned,
+    },
     // AI chats.
     row("chatgpt", "ChatGPT", &[Is("chatgpt.exe"), Is("com.openai.chat")], &[Exact("chatgpt")], ai_chat(10), Planned),
     row(
@@ -259,7 +286,14 @@ pub static REGISTRY: &[Target] = &[
     ),
     row("gemini", "Gemini", &[], &[Exact("google gemini"), Exact("gemini")], ai_chat(10), Planned),
     row("deepseek", "DeepSeek", &[], &[Segment("deepseek")], ai_chat(50), Planned),
-    row("alice", "Алиса", &[], &[Exact("алиса"), Segment("алиса ai")], Profile::of(OnePicture), Planned),
+    Target {
+        id: "alice",
+        name: ("Алиса", "Alice"),
+        apps: &[],
+        titles: &[Exact("алиса"), Segment("алиса ai")],
+        profile: Profile::of(OnePicture),
+        status: Planned,
+    },
     row("gigachat", "GigaChat", &[], &[Segment("gigachat")], Profile::of(OnePicture), Planned),
     // Work and documents.
     row("vscode", "VS Code", &[Is("code.exe"), Is("com.microsoft.vscode")], &[], Profile::of(OnePicture), Planned),
@@ -308,10 +342,17 @@ pub static REGISTRY: &[Target] = &[
             Is("wezterm-gui.exe"),
             Is("alacritty.exe"),
             Is("mintty.exe"),
+            Is("tabby.exe"),
+            Is("hyper.exe"),
             Is("com.apple.terminal"),
             Is("com.googlecode.iterm2"),
             Is("dev.warp.warp-stable"),
             Is("com.mitchellh.ghostty"),
+            Is("com.github.wez.wezterm"),
+            Is("org.alacritty"),
+            Is("net.kovidgoyal.kitty"),
+            Is("org.tabby"),
+            Is("co.zeit.hyper"),
         ],
         &[],
         Profile::of(Manual),
@@ -351,10 +392,12 @@ const BROWSERS: &[(&str, &str, Engine)] = &[
 const INVISIBLE: [char; 4] = ['\u{200b}', '\u{200e}', '\u{200f}', '\u{feff}'];
 
 /// The browser's own part of a Windows title, lowercase, longest first where one ends another. macOS window
-/// names have none; installed web apps (PWA) have none either.
+/// names have none; installed web apps (PWA) have none either. Edge in Russian ends with ": Microsoft Edge"
+/// (its locale pack has "$1: Microsoft Edge").
 const BROWSER_SUFFIXES: &[&str] = &[
     " - google chrome",
     " - microsoft edge",
+    ": microsoft edge",
     " \u{2014} mozilla firefox private browsing",
     " \u{2014} mozilla firefox",
     " - mozilla firefox",
@@ -394,7 +437,8 @@ pub fn is_browser(app: &str, path: &str) -> bool {
 
 pub fn detect(fg: &ForegroundInfo) -> Detected {
     if let Some(engine) = browser_engine(&fg.app, &fg.path) {
-        let target = fg.title.as_deref().map(normalize_title).and_then(|title| match_title(&title));
+        let edge = fg.app.eq_ignore_ascii_case("msedge.exe");
+        let target = fg.title.as_deref().map(normalize_title).and_then(|title| match_page(&title, edge));
         return Detected { target: target.unwrap_or_else(unknown), engine };
     }
     let app = fg.app.to_lowercase();
@@ -425,13 +469,31 @@ fn first_file_only(profile: Profile) -> Profile {
     }
 }
 
-/// Lowercase title without invisible marks, an unread counter such as "(3) " and the browser's suffix.
+/// Lowercase title without invisible marks, an unread counter such as "(3) ", the browser's suffix and Edge's
+/// tab count.
 pub fn normalize_title(raw: &str) -> String {
     let visible: String = raw.chars().filter(|c| !INVISIBLE.contains(c)).collect();
     let lower = visible.trim().to_lowercase();
     let title = strip_counter(&lower);
     let title = BROWSER_SUFFIXES.iter().find_map(|suffix| title.strip_suffix(suffix)).unwrap_or(title);
-    title.trim().to_string()
+    strip_tab_count(title).trim().to_string()
+}
+
+/// Edge adds the number of its other tabs to the page title ("Page and 3 more pages - Work - Microsoft Edge",
+/// "Page и еще 3 страницы \u{2014} Work: Microsoft Edge", from its locale packs). The page title ends there;
+/// only the profile name follows.
+fn strip_tab_count(title: &str) -> &str {
+    const MARKS: [(&str, &str); 3] = [(" and ", " more page"), (" и еще ", " страниц"), (" и ещё ", " страниц")];
+    for (lead, tail) in MARKS {
+        for (start, _) in title.rmatch_indices(lead) {
+            let rest = &title[start + lead.len()..];
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if digits > 0 && rest[digits..].starts_with(tail) {
+                return &title[..start];
+            }
+        }
+    }
+    title
 }
 
 fn strip_counter(title: &str) -> &str {
@@ -443,8 +505,19 @@ fn strip_counter(title: &str) -> &str {
     }
 }
 
-/// Whole-title rules first. Then the segments from the right, because a site names itself at the end
-/// ("Claude - Google Docs" is a document, not the Claude chat).
+/// Edge with several profiles puts the profile name between the page and its own name ("Page - Work -
+/// Microsoft Edge", in Russian "Page \u{2014} Work: Microsoft Edge"). An Edge title that nothing matches is
+/// tried once more without its last part.
+fn match_page(title: &str, edge: bool) -> Option<&'static Target> {
+    match_title(title).or_else(|| {
+        let cut = [" - ", " \u{2014} "].iter().filter_map(|separator| title.rfind(separator)).max();
+        cut.filter(|_| edge).and_then(|cut| match_title(title[..cut].trim()))
+    })
+}
+
+/// The rules anchored to the whole title (`Exact`, `Ends`) first. Then the segments from the right with
+/// `Segment` and `Contains`, because a site names itself at the end: "Claude - Google Docs" is a document,
+/// "Yandex Mail setup - Claude" is the Claude chat.
 fn match_title(title: &str) -> Option<&'static Target> {
     if title.is_empty() {
         return None;
@@ -453,13 +526,18 @@ fn match_title(title: &str) -> Option<&'static Target> {
         target.titles.iter().any(|rule| match *rule {
             Exact(text) => title == text,
             Ends(text) => title.ends_with(text),
-            Contains(text) => title.contains(text),
-            Segment(_) => false,
+            Segment(_) | Contains(_) => false,
         })
     });
     whole.or_else(|| {
         segments(title).into_iter().rev().find_map(|segment| {
-            REGISTRY.iter().find(|target| target.titles.iter().any(|rule| matches!(*rule, Segment(s) if s == segment)))
+            REGISTRY.iter().find(|target| {
+                target.titles.iter().any(|rule| match *rule {
+                    Segment(text) => segment == text,
+                    Contains(text) => segment.contains(text),
+                    Exact(_) | Ends(_) => false,
+                })
+            })
         })
     })
 }
@@ -509,6 +587,9 @@ mod tests {
         assert_eq!(native("notepad.exe"), "text_editor");
         assert_eq!(native("WindowsTerminal.exe"), "terminal");
         assert_eq!(native("com.apple.Terminal"), "terminal");
+        assert_eq!(native("com.github.wez.wezterm"), "terminal");
+        assert_eq!(native("net.kovidgoyal.kitty"), "terminal");
+        assert_eq!(native("Tabby.exe"), "terminal");
         assert_eq!(native("OUTLOOK.EXE"), "outlook_classic");
         assert_eq!(native("olk.exe"), "outlook_new");
         assert_eq!(native("MailClient.exe"), "emclient");
@@ -564,6 +645,36 @@ mod tests {
         assert_eq!(chrome("Claude - Google Docs - Google Chrome"), "gdocs");
         assert_eq!(chrome("Gmail - Google Docs - Google Chrome"), "gdocs");
         assert_eq!(chrome("Telegram tips - Google Docs - Google Chrome"), "gdocs");
+        assert_eq!(chrome("Yandex Mail setup help - Claude - Google Chrome"), "claude");
+        assert_eq!(chrome("Почта Mail.ru не работает - Claude - Google Chrome"), "claude");
+        assert_eq!(chrome("Яндекс Почта инструкция - Google Docs - Google Chrome"), "gdocs");
+        assert_eq!(chrome("Входящие - Почта Mail.ru - Google Chrome"), "mailru");
+        // Known collision: messenger.com is titled "Messenger" too and pastes like VK messages.
+        assert_eq!(chrome("Messenger - Google Chrome"), "vk_messages");
+    }
+
+    /// Formats from the Edge 155 locale packs (en-US, ru): "{0} and # more pages", "$1 - $2" with the profile,
+    /// "$1 - Microsoft Edge"; in Russian "{0} и еще # страницы", "$1 \u{2014} $2", "$1: Microsoft Edge".
+    #[test]
+    fn edge_titles() {
+        let edge = |title: &str| in_browser("msedge.exe", title).target.id;
+        let english = "Telegram Web and 3 more pages - Personal - Microsoft\u{200b} Edge";
+        assert_eq!(normalize_title(english), "telegram web");
+        assert_eq!(normalize_title("Telegram Web and 1 more page - Microsoft\u{200b} Edge"), "telegram web");
+        assert_eq!(
+            normalize_title("Telegram Web и еще 3 страницы \u{2014} Личный: Microsoft\u{200b} Edge"),
+            "telegram web"
+        );
+        assert_eq!(normalize_title("Почта и еще 1 страница: Microsoft\u{200b} Edge"), "почта");
+        assert_eq!(normalize_title("Top 5 and more pages - Microsoft Edge"), "top 5 and more pages", "no number");
+        assert_eq!(edge("Inbox - x - Gmail and 4 more pages - Personal - Microsoft\u{200b} Edge"), "gmail");
+        assert_eq!(edge("Telegram and 2 more pages - Personal - Microsoft\u{200b} Edge"), "tg_web_a");
+        assert_eq!(edge("Telegram - Personal - Microsoft\u{200b} Edge"), "tg_web_a", "profile, one tab");
+        assert_eq!(edge("Telegram \u{2014} Личный: Microsoft\u{200b} Edge"), "tg_web_a");
+        assert_eq!(edge("Home / X - Work - Microsoft\u{200b} Edge"), "x");
+        assert_eq!(edge("Chat - Claude - Work - Microsoft\u{200b} Edge"), "claude");
+        assert_eq!(edge("Page - Work - Microsoft\u{200b} Edge"), UNKNOWN);
+        assert_eq!(chrome("Telegram - Personal - Google Chrome"), UNKNOWN, "only Edge drops the last part");
     }
 
     #[test]
@@ -674,6 +785,21 @@ mod tests {
         assert_eq!((vk.name(Lang::Ru), vk.name(Lang::En)), ("ВКонтакте", "VK"));
         let claude = by_id("claude").unwrap();
         assert_eq!((claude.name(Lang::Ru), claude.name(Lang::En)), ("Claude", "Claude"));
+        let english: Vec<&str> =
+            ["pikabu", "habr", "alice"].iter().map(|id| by_id(id).unwrap().name(Lang::En)).collect();
+        assert_eq!(english, ["Pikabu", "Habr", "Alice"]);
+        for target in REGISTRY {
+            let name = target.name(Lang::En);
+            assert!(!name.chars().any(|c| ('\u{0400}'..='\u{04ff}').contains(&c)), "{}: English name", target.id);
+        }
+    }
+
+    #[test]
+    fn debug_output_leaves_the_title_out() {
+        let fg = ForegroundInfo { app: "chrome.exe".into(), path: String::new(), title: Some("Secret subject".into()) };
+        let printed = format!("{fg:?}");
+        assert!(printed.contains("chrome.exe") && printed.contains("has_title: true"), "{printed}");
+        assert!(!printed.to_lowercase().contains("secret"), "{printed}");
     }
 
     /// The public matrix lists every registry row exactly once per language, with the same status, and contains

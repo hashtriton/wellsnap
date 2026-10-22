@@ -16,11 +16,13 @@ How it pastes depends on the program in front. This page lists the programs Well
 - **On, not verified yet.** Every WellSnap build uses this rule, but it has not been checked by hand for this release yet.
 - **Not verified.** WellSnap pastes as into any unknown program: the text first, then all screenshots as files. The column "What paste with text does" shows the planned behaviour, which test builds already use.
 
+Web pages are checked in Chromium browsers (Chrome, Edge, Yandex Browser). Firefox and its forks also follow the row `gecko_engine`, so there a page counts as verified only when that row is verified too.
+
 The column "Plain Ctrl+V after Copy all" says what one ordinary paste gives. "Expected" means it comes from the program's source code or documentation and was not checked by hand.
 
 ## Privacy
 
-WellSnap recognises the program by its file name (the bundle id on macOS) and, in browsers, by the window title, only on this computer and only at the moment of the paste. The title is not saved and not sent anywhere. The local log records only which row of this page was used, for example `gmail`; a crash report, if you allow them, can contain the last lines of that log. Anonymous usage statistics (Settings > Privacy) count pastes only by broad kind of program, such as messenger, mail or browser.
+WellSnap recognises the program by its file name (the bundle id on macOS) and, in browsers, by the window title, only on this computer and only at the moment of the paste. The title is not saved and not sent anywhere. The local log records only which row of this page was used, for example `gmail`. By default WellSnap sends crash reports and anonymous usage statistics; both can be turned off in Settings > Privacy. A crash report can contain the last lines of the local log, including that row id. The statistics count pastes only by broad kind of program, such as messenger, mail or browser. Window titles, screenshots and comments are never sent.
 
 ## Messengers
 
@@ -45,11 +47,11 @@ WellSnap recognises the program by its file name (the bundle id on macOS) and, i
 
 | Program | Windows / macOS | What paste with text does | Plain Ctrl+V after Copy all | Status | id |
 |---|---|---|---|---|---|
-| Outlook (classic) | Windows | One paste of the whole Copy all: pictures in the text, the comments under each. Pictures over 16 MB in total: the text, then one joined picture | Screenshots as attachments (expected) | Not verified | `outlook_classic` |
+| Outlook (classic) | Windows | One paste of the whole Copy all: pictures in the text, the comments under each. Pictures too large to embed (about 12 MB of files in total): the text, then one joined picture | Screenshots as attachments (expected) | Not verified | `outlook_classic` |
 | Outlook (new) | Windows | The text, then all screenshots as attachments of one message | Pictures in the text (expected) | Not verified | `outlook_new` |
 | Outlook | macOS | The text, then all screenshots as files | Not known yet | Not verified | `outlook_mac` |
 | Outlook on the web | Browser | The text, then all screenshots as attachments of one message | Pictures in the text (expected) | Not verified | `outlook_web` |
-| Thunderbird, Betterbird | Windows, macOS | One paste of the whole Copy all: pictures in the text, the comments under each. Pictures over 16 MB in total: the text, then one joined picture | Pictures in the text, the comments under each (expected) | Not verified | `thunderbird` |
+| Thunderbird, Betterbird | Windows, macOS | One paste of the whole Copy all: pictures in the text, the comments under each. Pictures too large to embed (about 12 MB of files in total): the text, then one joined picture | Pictures in the text, the comments under each (expected) | Not verified | `thunderbird` |
 | eM Client | Windows, macOS | The text, then each screenshot pasted as a separate picture. More than 10: joined into 10 pictures | Pictures in the text or as attachments (expected) | Not verified | `emclient` |
 | The Bat! | Windows | The text, then each screenshot pasted as a separate picture. More than 10: joined into 10 pictures | Not known yet | Not verified | `thebat` |
 | Apple Mail | macOS | The text, then all screenshots as attachments of one message | Screenshots as attachments (expected) | Not verified | `apple_mail` |
@@ -111,7 +113,7 @@ Pages that no row above recognises follow the rule of the browser's engine.
 | Program | Windows / macOS | What paste with text does | Plain Ctrl+V after Copy all | Status | id |
 |---|---|---|---|---|---|
 | Notepad, Notepad++, TextEdit | Windows, macOS | Only the comment text | The comment text | Not verified | `text_editor` |
-| Windows Terminal, Command Prompt, PowerShell, WezTerm, Alacritty, mintty, Terminal, iTerm2, Warp, Ghostty | Windows, macOS | Nothing is pasted: the comment text goes to the clipboard and WellSnap shows a notice. A shell may run a pasted text line by line | The comment text (expected) | On, not verified yet | `terminal` |
+| Windows Terminal, Command Prompt, PowerShell, mintty (Windows); WezTerm, Alacritty, Tabby, Hyper (Windows, macOS); Terminal, iTerm2, Warp, Ghostty, kitty (macOS) | Windows, macOS | Nothing is pasted: the comment text goes to the clipboard and WellSnap shows a notice. A shell may run a pasted text line by line | The comment text (expected) | On, not verified yet | `terminal` |
 
 ## Known limits
 
@@ -120,7 +122,7 @@ Pages that no row above recognises follow the rule of the browser's engine.
 - Firefox and Thunderbird read only the first file of a pasted file list; Firefox before version 116 cannot paste files at all.
 - Telegram compresses photos to 1280 pixels on the long side (2560 with large photos turned on). For full size, send the screenshots as files.
 - X takes at most 4 pictures per post.
-- Web pages are recognised by the window title. ChatGPT names its window after the conversation, so only the start page is recognised. A title rewritten by an extension, or a page title in an unusual form, gives the unknown-program behaviour.
+- Web pages are recognised by the window title. ChatGPT names its window after the conversation, so only the start page is recognised. A title rewritten by an extension, or a page title in an unusual form, gives the unknown-program behaviour. Facebook Messenger (messenger.com) has the same title as VK messages and is pasted into the same way.
 - When the window changes during the paste, WellSnap stops pasting and shows a notice.
 
 ## A row is wrong or a program is missing

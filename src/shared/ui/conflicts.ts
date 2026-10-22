@@ -1,8 +1,19 @@
 // What to tell the user about the capture hotkey, from the core's registration status, the Windows Print Screen
 // setting and the scan for known screenshot tools. Shared by Settings > Shortcuts and onboarding.
 import type { TFunction } from "../i18n";
-import type { ConflictReport, ContenderId, ContenderRef, HotkeyStatus, Platform, PrintScreenStatus } from "../ipc";
+import type { ConflictReport, ContenderId, ContenderRef, HotkeyErrorKind, HotkeyStatus, Platform, PrintScreenStatus } from "../ipc";
 import { sameAccelerator } from "./hotkey";
+
+/** The error text the core gives a chord WellSnap refuses (hotkeys.rs RESERVED). */
+const RESERVED_ERROR = "reserved";
+
+/**
+ * Why a hotkey is not registered. The core's kind wins; without one (a core that does not classify yet) the
+ * reserved text still reads as reserved and any other error as "other".
+ */
+export function errorKind(kind: HotkeyErrorKind | null, error: string | null): HotkeyErrorKind | null {
+  return kind ?? (error === RESERVED_ERROR ? "reserved" : error ? "other" : null);
+}
 
 export type CaptureAdvice =
   | { kind: "ok" }
@@ -40,7 +51,7 @@ export function captureAdvice({ hotkey, status, printScreen, report, platform }:
     const apps = windows ? (report?.mayDouble ?? []) : [];
     return apps.length > 0 ? { kind: "mayDouble", apps } : { kind: "ok" };
   }
-  const kind = status.captureErrorKind ?? (status.captureError ? "other" : null);
+  const kind = errorKind(status.captureErrorKind, status.captureError);
   if (kind === null) return null;
   if (kind === "reserved") return { kind: "reserved" };
   if (kind === "other" || !windows) return { kind: "other" };
@@ -115,8 +126,80 @@ export function doubleNotes(advice: CaptureAdvice | null, printScreen: PrintScre
   return advice.apps.filter((a) => !hidden.includes(a.id) && (a.id !== "oneDrive" || !oneDriveShown(printScreen)));
 }
 
-/** The free key the core suggests instead of a taken one, unless it is the current key. */
-export function alternativeKey(advice: CaptureAdvice | null, report: ConflictReport | null, hotkey: string, platform: Platform): string | null {
+/**
+ * The free key the core suggests instead of a taken one. `avoid` holds the current capture key and the smart
+ * paste key: the core does not refuse two equal hotkeys, so the chip must never offer one of them.
+ */
+export function alternativeKey(
+  advice: CaptureAdvice | null,
+  report: ConflictReport | null,
+  avoid: readonly string[],
+  platform: Platform,
+): string | null {
   if (!isTaken(advice)) return null;
-  return report?.alternatives.find((a) => !sameAccelerator(a, hotkey, platform)) ?? null;
+  return report?.alternatives.find((a) => !avoid.some((k) => sameAccelerator(a, k, platform))) ?? null;
+}
+
+const HIDDEN_KEY = "wellsnap.hiddenConflicts";
+
+/** Ids of the double-fire notes the user hid. Storage can be missing, blocked or hold anything. */
+export function readHiddenNotes(): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeHiddenNotes(ids: readonly string[]): void {
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(ids));
+  } catch {
+    // Storage can be unavailable; the note then comes back next time, which is harmless.
+  }
+}
+
+/** What `conflictScanner` has loaded; `report` belongs to `hotkey`. */
+export interface ConflictScan {
+  hotkey: string;
+  report: ConflictReport | null;
+  printScreen: PrintScreenStatus | null;
+}
+
+export interface ConflictSources {
+  report: () => Promise<ConflictReport>;
+  printScreen: () => Promise<PrintScreenStatus>;
+}
+
+/**
+ * Loads the scan and the Print Screen setting. Only the latest round lands. The report is dropped as soon as the
+ * capture key changes or a rescan fails: a report of another key or an outdated one would name the wrong owner.
+ * The Print Screen setting does not depend on the key and is kept until a newer one arrives.
+ */
+export function conflictScanner(sources: ConflictSources, publish: (scan: ConflictScan) => void) {
+  let round = 0;
+  let scan: ConflictScan = { hotkey: "", report: null, printScreen: null };
+  const set = (patch: Partial<ConflictScan>) => {
+    scan = { ...scan, ...patch };
+    publish(scan);
+  };
+  return {
+    refresh(hotkey: string): void {
+      const n = ++round;
+      if (hotkey !== scan.hotkey) set({ hotkey, report: null });
+      sources.report().then(
+        (report) => n === round && set({ report }),
+        () => n === round && set({ report: null }),
+      );
+      sources.printScreen().then(
+        (printScreen) => n === round && set({ printScreen }),
+        () => undefined,
+      );
+    },
+    /** Drops every answer still on its way. */
+    stop(): void {
+      round++;
+    },
+  };
 }

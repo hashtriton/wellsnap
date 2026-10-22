@@ -5,7 +5,7 @@ import { useI18n, type TFunction } from "../shared/i18n";
 import { api, type AppInfo, type HotkeyStatus, type Platform, type Settings } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
 import { ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
-import { blockedText, captureAdvice } from "../shared/ui/conflicts";
+import { alternativeKey, blockedText, captureAdvice } from "../shared/ui/conflicts";
 import { Button, Keys, Notice, Row, Switch } from "../shared/ui/controls";
 import { useAppInfo, useSettings, type SettingsPatch } from "../shared/ui/hooks";
 import { defaultHotkeys, formatAccelerator, guessPlatform } from "../shared/ui/hotkey";
@@ -69,16 +69,7 @@ export function App() {
       <main className="onb-body" key={step}>
         {step === 0 && <Welcome t={t} platform={platform} hotkey={hotkey} headingRef={headingRef} />}
         {step === 1 && (
-          <Setup
-            t={t}
-            platform={platform}
-            settings={settings}
-            update={update}
-            info={info}
-            refresh={refresh}
-            hotkey={hotkey}
-            headingRef={headingRef}
-          />
+          <Setup t={t} platform={platform} settings={settings} update={update} info={info} refresh={refresh} headingRef={headingRef} />
         )}
         {step === 2 && <TryIt t={t} platform={platform} hotkey={hotkey} status={info?.hotkeys} headingRef={headingRef} />}
       </main>
@@ -150,7 +141,6 @@ function Setup({
   update,
   info,
   refresh,
-  hotkey,
   headingRef,
 }: {
   t: TFunction;
@@ -159,7 +149,6 @@ function Setup({
   update: (patch: SettingsPatch) => Promise<boolean>;
   info: AppInfo | null;
   refresh: () => void;
-  hotkey: string;
   headingRef: HeadingRef;
 }) {
   const mac = platform === "macos";
@@ -170,14 +159,8 @@ function Setup({
       </h1>
       <p className="onb-lead">{t("onboarding.setup.lead")}</p>
       <div className="onb-stack">
-        {mac ? (
-          <MacPermissions t={t} info={info} refresh={refresh} />
-        ) : (
-          <>
-            <PrintScreenCard t={t} />
-            <SetupConflicts t={t} platform={platform} hotkey={hotkey} status={info?.hotkeys} update={update} refresh={refresh} />
-          </>
-        )}
+        {mac ? <MacPermissions t={t} info={info} refresh={refresh} /> : <PrintScreenCard t={t} />}
+        {!mac && <SetupConflicts t={t} platform={platform} settings={settings} status={info?.hotkeys} update={update} refresh={refresh} />}
         {settings && (
           <div className="card onb-row-card">
             <Row label={mac ? t("onboarding.setup.autostartMac") : t("onboarding.setup.autostart")} description={t("onboarding.setup.autostartDesc")}>
@@ -206,41 +189,58 @@ function Setup({
 function SetupConflicts({
   t,
   platform,
-  hotkey,
+  settings,
   status,
   update,
   refresh,
 }: {
   t: TFunction;
   platform: Platform;
-  hotkey: string;
+  settings: Settings | null;
   status: HotkeyStatus | undefined;
   update: (patch: SettingsPatch) => Promise<boolean>;
   refresh: () => void;
 }) {
-  const conflicts = useConflicts(platform, `${hotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const defaults = defaultHotkeys(platform);
+  const hotkey = settings?.captureHotkey ?? defaults.capture;
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const conflicts = useConflicts(platform, hotkey);
   const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
   const recheck = async () => {
     try {
       await api.hotkeysRecheck();
     } catch {
-      // The card follows the status the core publishes.
+      // The card follows the status the core publishes, which also rescans the conflicts.
     }
     refresh();
-    conflicts.refresh();
+  };
+  const switchTo = async (captureHotkey: string) => {
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      setSaveFailed(!(await update({ captureHotkey })));
+    } finally {
+      setSaving(false);
+    }
   };
   return (
-    <ConflictCard
-      t={t}
-      platform={platform}
-      hotkey={hotkey}
-      advice={advice}
-      report={conflicts.report}
-      printScreen={conflicts.printScreen}
-      withFix
-      onRecheck={recheck}
-      onUseAlternative={(captureHotkey) => void update({ captureHotkey })}
-    />
+    <>
+      <ConflictCard
+        t={t}
+        platform={platform}
+        hotkey={hotkey}
+        advice={advice}
+        printScreen={conflicts.printScreen}
+        fix={{
+          alternative: alternativeKey(advice, conflicts.report, [hotkey, settings?.smartPasteHotkey ?? defaults.smartPaste], platform),
+          busy: saving,
+          onRecheck: recheck,
+          onUseAlternative: (accelerator) => void switchTo(accelerator),
+        }}
+      />
+      {saveFailed && <Notice tone="error">{t("settings.hotkeys.saveFailed")}</Notice>}
+    </>
   );
 }
 
@@ -334,7 +334,7 @@ function TryIt({
   headingRef: HeadingRef;
 }) {
   const [busy, setBusy] = useState(false);
-  const conflicts = useConflicts(platform, `${hotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const conflicts = useConflicts(platform, hotkey);
   const advice = captureAdvice({ hotkey, status, printScreen: conflicts.printScreen, report: conflicts.report, platform });
   // "Press PrtSc" would open another app or nothing at all: say why and offer the button instead.
   const blocked = blockedText(advice, formatAccelerator(hotkey, platform), t);

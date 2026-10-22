@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { Platform } from "../shared/ipc";
 import { api } from "../shared/ipc";
 import type { TFunction } from "../shared/i18n";
@@ -24,7 +24,7 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
   const defaults = defaultHotkeys(platform);
   const status = info?.hotkeys;
   const [openFailed, setOpenFailed] = useState(false);
-  const conflicts = useConflicts(platform, `${settings.captureHotkey}|${status?.captureRegistered}|${status?.captureErrorKind}`);
+  const conflicts = useConflicts(platform, settings.captureHotkey);
   const advice = captureAdvice({
     hotkey: settings.captureHotkey,
     status,
@@ -37,17 +37,17 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
     try {
       await api.hotkeysRecheck();
     } catch {
-      // The status line is re-read below either way.
+      // The status line is re-read below either way; the published status also rescans the conflicts.
     }
     refreshInfo();
-    conflicts.refresh();
   };
-  // Re-registering helps whenever the key failed for any reason but WellSnap's own refusal.
+  // Windows: re-registering helps whenever another program may have held the key. "other" counts too, since
+  // a core that does not classify errors yet reports a taken key that way. macOS keeps its usual texts.
   const fix: Fix | undefined =
-    isTaken(advice) || advice?.kind === "other"
+    isTaken(advice) || (platform === "windows" && advice?.kind === "other")
       ? {
-          steps: fixSteps(suspectsOf(advice), null, t),
-          alternative: alternativeKey(advice, conflicts.report, settings.captureHotkey, platform),
+          steps: fixSteps(suspectsOf(advice), conflicts.printScreen, t),
+          alternative: alternativeKey(advice, conflicts.report, [settings.captureHotkey, settings.smartPasteHotkey], platform),
           onRecheck: recheck,
         }
       : undefined;
@@ -72,20 +72,12 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
         />
         <HotkeyRow
           label={t("settings.hotkeys.smartPaste")}
-          description={
-            <>
-              {t("settings.hotkeys.smartPasteDesc")}
-              <div>
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={async () => setOpenFailed(!(await openLink(pasteTargetsUrl(lang))))}
-                >
-                  {t("settings.hotkeys.smartPasteWhere")}
-                  <Icon name="external" size={13} />
-                </button>
-              </div>
-            </>
+          description={t("settings.hotkeys.smartPasteDesc")}
+          link={
+            <button type="button" className="link-btn" onClick={async () => setOpenFailed(!(await openLink(pasteTargetsUrl(lang))))}>
+              {t("settings.hotkeys.smartPasteWhere")}
+              <Icon name="external" size={13} />
+            </button>
           }
           value={settings.smartPasteHotkey}
           fallback={defaults.smartPaste}
@@ -101,17 +93,7 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
       {platform === "windows" && (
         <>
           <PrintScreenCard t={t} />
-          <ConflictCard
-            t={t}
-            platform={platform}
-            hotkey={settings.captureHotkey}
-            advice={advice}
-            report={conflicts.report}
-            printScreen={conflicts.printScreen}
-            withFix={false}
-            onRecheck={recheck}
-            onUseAlternative={(captureHotkey) => void update({ captureHotkey })}
-          />
+          <ConflictCard t={t} platform={platform} hotkey={settings.captureHotkey} advice={advice} printScreen={conflicts.printScreen} />
         </>
       )}
       {platform === "macos" && (
@@ -131,6 +113,7 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
 function HotkeyRow({
   label,
   description,
+  link,
   value,
   fallback,
   other,
@@ -143,7 +126,9 @@ function HotkeyRow({
   save,
 }: {
   label: string;
-  description: ReactNode;
+  description: string;
+  /** Under the description, but not part of the recorder's accessible description. */
+  link?: ReactNode;
   value: string;
   fallback: string;
   other: { value: string; label: string };
@@ -158,6 +143,7 @@ function HotkeyRow({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const descId = useId();
 
   /** Checks for a clash with the other hotkey and the syntax, then saves. Returns true when saved. */
   const apply = async (accelerator: string): Promise<boolean> => {
@@ -198,8 +184,17 @@ function HotkeyRow({
             : null);
 
   return (
-    <Row label={label} description={description} stacked>
-      {({ descId }) => (
+    <Row
+      label={label}
+      description={
+        <>
+          <span id={descId}>{description}</span>
+          {link && <div>{link}</div>}
+        </>
+      }
+      stacked
+    >
+      {() => (
         <div className="hotkey-row">
           <div className="hotkey-controls">
             <HotkeyRecorder

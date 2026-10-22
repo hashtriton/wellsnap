@@ -745,6 +745,15 @@ describe("Lightshot habits", () => {
     expect(api.overlayFinish).not.toHaveBeenCalled();
   });
 
+  it("shows the same notice on Ctrl+E before anything is selected", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    ctrl("KeyE");
+    expect(editor.getView().notice).toEqual({ key: "overlay.notices.editHere", tone: "info" });
+    expect(editor.getView().phase).toBe("idle");
+    expect(api.overlayFinish).not.toHaveBeenCalled();
+    expect(api.overlayCancel).not.toHaveBeenCalled();
+  });
+
   it("closes on Ctrl+X with the same layers and second press as Esc", () => {
     withAnnotation();
     ctrl("KeyX");

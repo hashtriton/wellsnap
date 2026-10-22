@@ -1,66 +1,52 @@
 // Windows only: other screenshot tools that hold or share the capture key, with their own steps to free it.
 // WellSnap only re-registers or changes its own key; it never closes or reconfigures another program.
 // Used in Settings > Shortcuts and in onboarding, next to PrintScreenCard.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TFunction } from "../i18n";
-import { api, type ConflictReport, type ContenderId, type Platform, type PrintScreenStatus } from "../ipc";
-import { alternativeKey, doubleNotes, fixSteps, isTaken, suspectsOf, takenText, type CaptureAdvice } from "./conflicts";
+import { api, events, type ConflictReport, type ContenderId, type Platform, type PrintScreenStatus } from "../ipc";
+import {
+  conflictScanner,
+  doubleNotes,
+  fixSteps,
+  isTaken,
+  readHiddenNotes,
+  suspectsOf,
+  takenText,
+  writeHiddenNotes,
+  type CaptureAdvice,
+  type ConflictScan,
+} from "./conflicts";
 import { Button, Notice } from "./controls";
 import { formatAccelerator } from "./hotkey";
 import { Icon } from "./icons";
 
-/** The scan and the Print Screen setting, refreshed on mount, on focus and whenever `key` changes. */
-export function useConflicts(
-  platform: Platform,
-  key: string,
-): { report: ConflictReport | null; printScreen: PrintScreenStatus | null; refresh: () => void } {
-  const [report, setReport] = useState<ConflictReport | null>(null);
-  const [printScreen, setPrintScreen] = useState<PrintScreenStatus | null>(null);
-  // Only the latest round may land: an older scan must not overwrite a newer one.
-  const round = useRef(0);
-
-  const refresh = useCallback(() => {
-    if (platform !== "windows") return;
-    const n = ++round.current;
-    api
-      .hotkeyConflicts()
-      .then((r) => n === round.current && setReport(r))
-      .catch(() => undefined);
-    api
-      .printScreenStatus()
-      .then((s) => n === round.current && setPrintScreen(s))
-      .catch(() => undefined);
-  }, [platform]);
+/**
+ * The scan and the Print Screen setting for the capture key `hotkey`, loaded on mount, on focus, when the key
+ * changes and whenever the core publishes the hotkey status. The core publishes after every registration,
+ * including "Check again" and PrintScreenCard's take-over and restore, so those need no refresh of their own.
+ */
+export function useConflicts(platform: Platform, hotkey: string): { report: ConflictReport | null; printScreen: PrintScreenStatus | null } {
+  const [scan, setScan] = useState<ConflictScan | null>(null);
+  const scanner = useMemo(
+    () => (platform === "windows" ? conflictScanner({ report: api.hotkeyConflicts, printScreen: api.printScreenStatus }, setScan) : null),
+    [platform],
+  );
 
   useEffect(() => {
+    if (!scanner) return;
+    const refresh = () => scanner.refresh(hotkey);
     refresh();
     window.addEventListener("focus", refresh);
+    const unlisten = events.onHotkeysStatus(refresh);
     return () => {
-      round.current++;
+      scanner.stop();
       window.removeEventListener("focus", refresh);
+      unlisten.then((f) => f());
     };
-  }, [refresh, key]);
+  }, [scanner, hotkey]);
 
-  return { report, printScreen, refresh };
-}
-
-const HIDDEN_KEY = "wellsnap.hiddenConflicts";
-
-function readHidden(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeHidden(ids: string[]): void {
-  try {
-    localStorage.setItem(HIDDEN_KEY, JSON.stringify(ids));
-  } catch {
-    // Storage can be unavailable; the note then comes back next time, which is harmless.
-  }
+  // Until the scanner publishes for a new key, the report of the old one must not show.
+  return { report: scan?.hotkey === hotkey ? scan.report : null, printScreen: scan?.printScreen ?? null };
 }
 
 /**
@@ -130,43 +116,46 @@ export function CaptureFix({
   );
 }
 
+/** The taken key's fix in the card (onboarding); Settings shows it in the capture row instead. */
+export interface CardFix {
+  alternative: string | null;
+  /** The alternative key is being saved. */
+  busy: boolean;
+  onRecheck: () => Promise<void>;
+  onUseAlternative: (accelerator: string) => void;
+}
+
 /**
- * Settings (`withFix` false): only the notes about tools that may react to the same key; the capture row names
- * the owner of a taken key. Onboarding (`withFix` true): also the taken key, its fix and the actions.
+ * The notes about tools that may react to the same key and, with `fix` (onboarding), also the taken key, its
+ * steps and the actions. In Settings the capture row names the owner of a taken key.
  */
 export function ConflictCard({
   t,
   platform,
   hotkey,
   advice,
-  report,
   printScreen,
-  withFix,
-  onRecheck,
-  onUseAlternative,
+  fix,
 }: {
   t: TFunction;
   platform: Platform;
   hotkey: string;
   advice: CaptureAdvice | null;
-  report: ConflictReport | null;
   printScreen: PrintScreenStatus | null;
-  withFix: boolean;
-  onRecheck: () => Promise<void>;
-  onUseAlternative: (accelerator: string) => void;
+  fix?: CardFix;
 }) {
-  const [hidden, setHidden] = useState<string[]>(readHidden);
+  const [hidden, setHidden] = useState<string[]>(readHiddenNotes);
   if (platform !== "windows") return null;
 
   const label = formatAccelerator(hotkey, platform);
-  const fix = withFix && isTaken(advice);
+  const taken = fix && isTaken(advice) ? advice : null;
   const notes = doubleNotes(advice, printScreen, hidden);
-  if (!fix && notes.length === 0) return null;
+  if (!taken && notes.length === 0) return null;
 
   const hide = (id: ContenderId) => {
     const next = [...hidden.filter((h) => h !== id), id];
     setHidden(next);
-    writeHidden(next);
+    writeHiddenNotes(next);
   };
 
   return (
@@ -179,17 +168,18 @@ export function ConflictCard({
           {t("settings.conflicts.title")}
         </h3>
       </div>
-      {fix && (
+      {taken && fix && (
         <>
-          <p className="card-text">{takenText(advice, label, t) ?? t("settings.hotkeys.statusTaken")}</p>
+          <p className="card-text">{takenText(taken, label, t) ?? t("settings.hotkeys.statusTaken")}</p>
           <CaptureFix
             t={t}
             platform={platform}
-            steps={fixSteps(suspectsOf(advice), printScreen, t)}
-            alternative={alternativeKey(advice, report, hotkey, platform)}
+            steps={fixSteps(suspectsOf(taken), printScreen, t)}
+            alternative={fix.alternative}
+            busy={fix.busy}
             collapsed={false}
-            onRecheck={onRecheck}
-            onUseAlternative={onUseAlternative}
+            onRecheck={fix.onRecheck}
+            onUseAlternative={fix.onUseAlternative}
           />
         </>
       )}

@@ -22,10 +22,16 @@ describe("hotkey status", () => {
     expect(captureStatus(status({}))).toBeNull();
   });
 
-  it("reads the kind, not the text of the error", () => {
+  it("prefers the kind to the text of the error", () => {
     expect(captureStatus(status({ captureError: "reserved", captureErrorKind: "taken" }))).toBe("taken");
     expect(captureStatus(status({ captureError: "something", captureErrorKind: "reserved" }))).toBe("reserved");
-    expect(captureStatus(status({ captureError: "reserved" }))).toBe("taken");
+  });
+
+  it("still knows the reserved text from a core that sends no kind", () => {
+    expect(captureStatus(status({ captureError: "reserved" }))).toBe("reserved");
+    expect(captureStatus(status({ captureError: "HotKey already registered: PrintScreen" }))).toBe("taken");
+    expect(smartPasteStatus(status({ smartPasteError: "reserved" }))).toBe("reserved");
+    expect(smartPasteStatus(status({ smartPasteError: "taken by another app" }))).toBe("taken");
   });
 
   it("treats an unregistered smart paste without an error as idle", () => {

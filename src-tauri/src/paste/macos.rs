@@ -1,13 +1,16 @@
 //! macOS synthetic paste (CGEventPost Cmd+V) and frontmost app detection. Posting events needs the
 //! Accessibility permission (CGPreflightPostEventAccess), which System Settings lists under Accessibility.
 
+use super::target::{ForegroundInfo, is_browser};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSWorkspace;
+use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType};
 use objc2_core_graphics::{
     CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGKeyCode,
-    CGPreflightPostEventAccess, CGRequestPostEventAccess,
+    CGPreflightPostEventAccess, CGRequestPostEventAccess, CGWindowListCopyWindowInfo, CGWindowListOption,
+    kCGNullWindowID, kCGWindowLayer, kCGWindowName, kCGWindowOwnerPID,
 };
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -174,6 +177,36 @@ pub fn foreground_app() -> Option<String> {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
         Some(app.bundleIdentifier()?.to_string())
     })
+}
+
+/// The bundle id of the frontmost application and, for a browser, the name of its front window.
+pub fn foreground_info() -> Option<ForegroundInfo> {
+    let (app, pid) = autoreleasepool(|_| {
+        let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+        Some((app.bundleIdentifier()?.to_string(), app.processIdentifier()))
+    })?;
+    let title = if is_browser(&app, "") { window_title(pid) } else { None };
+    Some(ForegroundInfo { app, path: String::new(), title })
+}
+
+/// macOS fills in kCGWindowName only for apps that hold Screen Recording, which capture needs anyway; reading
+/// it shows no prompt. Without the permission the name is missing and detection uses the bundle id alone.
+fn window_title(pid: i32) -> Option<String> {
+    let options = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID)?;
+    // SAFETY: every element of the window list is a dictionary with CFString keys (CGWindow.h).
+    let windows = unsafe { list.cast_unchecked::<CFDictionary<CFString, CFType>>() };
+    let number = |window: &CFDictionary<CFString, CFType>, key: &CFString| {
+        window.get(key)?.downcast_ref::<CFNumber>()?.as_i64()
+    };
+    // SAFETY: the keys are immutable CFString constants of CoreGraphics.
+    let (owner, layer, name) = unsafe { (kCGWindowOwnerPID, kCGWindowLayer, kCGWindowName) };
+    // The list runs from the front window to the back; layer 0 holds normal windows, not menus or panels.
+    let front = windows
+        .iter()
+        .find(|window| number(window, owner) == Some(i64::from(pid)) && number(window, layer) == Some(0))?;
+    let title = front.get(name)?;
+    Some(title.downcast_ref::<CFString>()?.to_string())
 }
 
 pub fn can_send_input() -> bool {

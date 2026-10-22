@@ -1,8 +1,9 @@
 //! Windows synthetic paste (SendInput) and foreground app detection.
 
+use super::target::{ForegroundInfo, is_browser};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE, HWND};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
     TokenIntegrityLevel,
@@ -15,13 +16,16 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC,
     MapVirtualKeyW, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_V,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
 use windows::core::PWSTR;
 
 const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN];
 const POLL: Duration = Duration::from_millis(10);
 /// SECURITY_MANDATORY_HIGH_RID: the integrity level of a process running as administrator.
 const HIGH_INTEGRITY_RID: u32 = 0x3000;
+/// Longest window title read, in UTF-16 units; the site names that detection looks for are near the end of
+/// much shorter titles.
+const TITLE_MAX: usize = 1024;
 
 pub fn wait_modifiers_released(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
@@ -82,14 +86,40 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
 /// Lowercase executable name of the process that owns the foreground window. Store (UWP) apps report
 /// their frame host, "applicationframehost.exe".
 pub fn foreground_app() -> Option<String> {
+    exe_name(&process_path(foreground_pid()?)?)
+}
+
+/// The executable of the foreground window, its lowercase path and, for a browser, the window title. One
+/// GetForegroundWindow call, so the title belongs to the same window as the executable.
+pub fn foreground_info() -> Option<ForegroundInfo> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return None;
+    }
+    let path = process_path(window_pid(hwnd)?)?;
+    let app = exe_name(&path)?;
+    let path = path.to_lowercase();
+    let title = if is_browser(&app, &path) { window_title(hwnd) } else { None };
+    Some(ForegroundInfo { app, path, title })
+}
+
+/// For a window of another process GetWindowTextW returns the caption Windows stores, without sending the
+/// window a message, so a hung target cannot block the paste.
+fn window_title(hwnd: HWND) -> Option<String> {
+    let mut buf = [0u16; TITLE_MAX + 1];
+    let len = usize::try_from(unsafe { GetWindowTextW(hwnd, &mut buf) }).ok()?.min(TITLE_MAX);
+    (len > 0).then(|| String::from_utf16_lossy(&buf[..len]))
+}
+
+fn process_path(pid: u32) -> Option<String> {
     unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, foreground_pid()?).ok()?;
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = vec![0u16; 32_768];
         let mut len = buf.len() as u32;
         let queried = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
         let _ = CloseHandle(process);
         queried.ok()?;
-        exe_name(&String::from_utf16_lossy(&buf[..len as usize]))
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
     }
 }
 
@@ -100,15 +130,17 @@ pub fn foreground_window() -> Option<usize> {
 }
 
 fn foreground_pid() -> Option<u32> {
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return None;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        (pid != 0).then_some(pid)
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return None;
     }
+    window_pid(hwnd)
+}
+
+fn window_pid(hwnd: HWND) -> Option<u32> {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
 }
 
 /// User Interface Privilege Isolation drops our synthetic keys to such a window without any error.
@@ -185,6 +217,17 @@ mod tests {
         );
         assert_eq!(exe_name(r"\\?\C:\Program Files\App\APP.EXE").as_deref(), Some("app.exe"));
         assert_eq!(exe_name(""), None);
+    }
+
+    #[test]
+    fn foreground_info_is_consistent() {
+        assert_eq!(window_title(HWND::default()), None, "no window, no title");
+        // A test run may have no foreground window at all (CI); when there is one, check its shape.
+        if let Some(info) = foreground_info() {
+            assert_eq!(info.path, info.path.to_lowercase());
+            assert!(info.path.ends_with(&info.app), "{} / {}", info.app, info.path);
+            assert!(info.title.is_none() || is_browser(&info.app, &info.path), "titles of browsers only");
+        }
     }
 
     #[test]

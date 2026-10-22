@@ -1,6 +1,9 @@
 //! Synthetic paste for "smart paste": the app pastes the text first and then the files, because one native
 //! paste cannot deliver both (see clipboard/mod.rs). Platform parts are implemented in the platform tasks.
 
+pub mod plan;
+pub mod target;
+
 use std::time::Duration;
 
 /// Waits until Ctrl/Alt/Shift/Win (Cmd/Option/Control/Shift on macOS) are physically released, so the
@@ -17,6 +20,13 @@ pub fn send_paste() -> Result<(), String> {
 /// Executable name (Windows, lowercase, e.g. "telegram.exe") or bundle id (macOS) of the foreground app.
 pub fn foreground_app() -> Option<String> {
     platform::foreground_app()
+}
+
+/// The foreground program for `target::detect`: the executable (bundle id on macOS) and, for browsers only, the
+/// window title. The title must never be logged or stored.
+#[allow(dead_code)] // Called by smart paste from WP4b on.
+pub fn foreground_info() -> Option<target::ForegroundInfo> {
+    platform::foreground_info()
 }
 
 /// Identifies the foreground window (Windows) or app (macOS), to notice a focus change between two pastes. It
@@ -69,6 +79,9 @@ mod platform {
         Err("unsupported platform".into())
     }
     pub fn foreground_app() -> Option<String> {
+        None
+    }
+    pub fn foreground_info() -> Option<super::target::ForegroundInfo> {
         None
     }
     pub fn can_send_input() -> bool {

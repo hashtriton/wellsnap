@@ -1,0 +1,57 @@
+name: Вставка с текстом / Paste with text
+description: Строка таблицы неверна или программы нет в списке / A row of the paste table is wrong or a program is missing
+title: "Вставка с текстом / Paste with text: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Таблица программ: [docs/paste-targets.ru.md](https://github.com/hashtriton/wellsnap/blob/main/docs/paste-targets.ru.md). Не прикладывайте скриншоты с личной перепиской.
+
+        The program table: [docs/paste-targets.md](https://github.com/hashtriton/wellsnap/blob/main/docs/paste-targets.md). Please do not attach screenshots of private conversations.
+  - type: input
+    id: program
+    attributes:
+      label: Программа и её версия / Program and its version
+      description: Для сайта укажите адрес и браузер / For a website, give its address and the browser
+      placeholder: Telegram Desktop 6.2, Gmail in Chrome 141
+    validations:
+      required: true
+  - type: input
+    id: row
+    attributes:
+      label: id строки в таблице, если есть / Row id in the table, if any
+      placeholder: gmail
+  - type: input
+    id: system
+    attributes:
+      label: Система / System
+      placeholder: Windows 11 24H2, macOS 15.5
+    validations:
+      required: true
+  - type: input
+    id: wellsnap
+    attributes:
+      label: Версия WellSnap / WellSnap version
+      description: Настройки > О программе / Settings > About
+    validations:
+      required: true
+  - type: input
+    id: count
+    attributes:
+      label: Сколько снимков вы вставляли / How many screenshots you pasted
+      placeholder: "3"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидали / What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что получилось / What happened
+      description: Сколько картинок пришло и в каком порядке, где оказался текст / How many pictures arrived and in which order, where the text went
+    validations:
+      required: true

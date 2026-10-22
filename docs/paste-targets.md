@@ -112,7 +112,9 @@ Pages that no row above recognises follow the rule of the browser's engine.
 
 | Program | Windows / macOS | What paste with text does | Plain Ctrl+V after Copy all | Status | id |
 |---|---|---|---|---|---|
-| Notepad, Notepad++, TextEdit | Windows, macOS | Only the comment text | The comment text | Verified: 2026-10-22, Windows 11, WellSnap 0.1.0 | `text_editor` |
+| Notepad | Windows | Only the comment text, with a notice that the screenshots were left out. Without comments nothing is pasted and WellSnap says so | The comment text | Verified: 2026-10-22, Windows 11, WellSnap 0.1.0 | `text_editor` |
+| Notepad++ | Windows | Only the comment text, with a notice that the screenshots were left out | The comment text (expected) | Not verified | `notepad_plus_plus` |
+| TextEdit | macOS | Only the comment text, with a notice that the screenshots were left out | Not known yet | Not verified | `textedit` |
 | Windows Terminal, Command Prompt, PowerShell, mintty (Windows); WezTerm, Alacritty, Tabby, Hyper (Windows, macOS); Terminal, iTerm2, Warp, Ghostty, kitty (macOS) | Windows, macOS | Nothing is pasted: the comment text goes to the clipboard and WellSnap shows a notice. A shell may run a pasted text line by line | The comment text (expected) | On, not verified yet | `terminal` |
 
 ## Known limits

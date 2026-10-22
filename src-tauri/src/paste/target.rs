@@ -325,14 +325,10 @@ pub static REGISTRY: &[Target] = &[
     // Browsers: rules by engine, for pages no row above recognises.
     row(GECKO_ENGINE, "Firefox", &[], &[], Profile::of(OnePicture), Planned),
     // Terminals and editors.
-    row(
-        "text_editor",
-        "Notepad",
-        &[Is("notepad.exe"), Is("notepad++.exe"), Is("com.apple.textedit")],
-        &[],
-        Profile::of(TextOnly),
-        CHECKED_WIN,
-    ),
+    row("text_editor", "Notepad", &[Is("notepad.exe")], &[], Profile::of(TextOnly), CHECKED_WIN),
+    row("notepad_plus_plus", "Notepad++", &[Is("notepad++.exe")], &[], Profile::of(TextOnly), Planned),
+    // Rich text by default, so it may take pictures too.
+    row("textedit", "TextEdit", &[Is("com.apple.textedit")], &[], Profile::of(TextOnly), Planned),
     // A multi-line paste into a console may run its lines, so nothing is pasted there.
     row(
         "terminal",
@@ -590,6 +586,8 @@ mod tests {
         assert_eq!(native("WhatsApp.Root.exe"), "whatsapp");
         assert_eq!(native("Code.exe"), "vscode");
         assert_eq!(native("notepad.exe"), "text_editor");
+        assert_eq!(native("Notepad++.exe"), "notepad_plus_plus");
+        assert_eq!(native("com.apple.TextEdit"), "textedit");
         assert_eq!(native("WindowsTerminal.exe"), "terminal");
         assert_eq!(native("com.apple.Terminal"), "terminal");
         assert_eq!(native("com.github.wez.wezterm"), "terminal");

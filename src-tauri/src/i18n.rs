@@ -148,6 +148,16 @@ pub fn tr(lang: Lang, key: &str) -> &'static str {
         } else {
             "The comment text is in the clipboard if you need it"
         },
+        "toast.pasteTextOnly" => if ru {
+            "Сюда вставляется только текст, поэтому вставлены одни комментарии"
+        } else {
+            "This app takes text only, so only the comments were pasted"
+        },
+        "toast.pasteNoText" => if ru {
+            "Сюда вставляется только текст, а комментариев нет: вставлять нечего"
+        } else {
+            "This app takes text only, and there are no comments: nothing to paste"
+        },
         "block.legend" => if ru { "Картинки по порядку:" } else { "Images in order:" },
         "block.snapshots" => if ru { "Снимки" } else { "Screenshots" },
         _ => "",

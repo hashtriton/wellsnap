@@ -594,8 +594,8 @@ enum Act {
     PutText { transient: bool },
     /// Content `k` on the clipboard.
     Put(usize),
-    /// Stop when the window changed during the pause. Before every key press but the first, after the clipboard
-    /// write, so the notice can say the pictures are on the clipboard.
+    /// Stop when the window changed. Before every key press, after the clipboard write: writing a picture can
+    /// take a while, and the notice can then say the pictures are on the clipboard.
     CheckFocus,
     /// Ctrl+V (Cmd+V on macOS). Smart paste never presses Enter.
     Paste,
@@ -621,10 +621,7 @@ fn acts(steps: &[Step]) -> Vec<Act> {
             }
         };
         acts.push(put);
-        // The window was checked right before the first step.
-        if i > 0 {
-            acts.push(Act::CheckFocus);
-        }
+        acts.push(Act::CheckFocus);
         acts.push(Act::Paste);
     }
     acts
@@ -635,6 +632,8 @@ fn acts(steps: &[Step]) -> Vec<Act> {
 struct Ran {
     /// The window changed after `done` of `total` contents were pasted.
     stopped: Option<(usize, usize)>,
+    /// The window changed before the first key press, with only the text on the clipboard.
+    cancelled: bool,
     /// The text was left on the clipboard.
     text_left: bool,
 }
@@ -642,7 +641,7 @@ struct Ran {
 /// A window change stops the paste without an error; a failed clipboard write or key press is an error.
 fn run(acts: &[Act], text: &str, contents: &[PasteContent], still_there: impl Fn() -> bool) -> Result<Ran, String> {
     let mut ran = Ran::default();
-    let (mut done, mut content_put) = (0, false);
+    let (mut done, mut content_put, mut pressed) = (0, false, false);
     for act in acts {
         match *act {
             Act::Pause => std::thread::sleep(SMART_PASTE_GAP),
@@ -654,16 +653,21 @@ fn run(acts: &[Act], text: &str, contents: &[PasteContent], still_there: impl Fn
                 contents.get(k).ok_or("no content to paste")?.write()?;
                 content_put = true;
             }
-            // Focus moved during the pause (a notification click, Alt+Tab): the rest would go elsewhere.
+            // Focus moved since the last check (a notification click, Alt+Tab): the rest would go elsewhere.
             Act::CheckFocus => {
                 if !still_there() {
-                    ran.stopped = Some((done, contents.len()));
+                    if content_put || pressed {
+                        ran.stopped = Some((done, contents.len()));
+                    } else {
+                        ran.cancelled = true;
+                    }
                     return Ok(ran);
                 }
             }
             Act::Paste => {
                 crate::paste::send_paste()?;
                 done += usize::from(content_put);
+                pressed = true;
             }
             Act::LeaveText => {
                 clipboard::copy_text(text.to_string(), false).map_err(|e| e.to_string())?;
@@ -684,6 +688,9 @@ fn notice_after(
     snapshots: usize,
     cramped: bool,
 ) -> Option<(String, Option<&'static str>)> {
+    if ran.cancelled {
+        return Some((tr(lang, "toast.pasteCancelled").to_string(), None));
+    }
     if let Some((done, total)) = ran.stopped {
         let text = if total > 1 {
             tr(lang, "toast.pasteStopped").replace("{done}", &done.to_string()).replace("{total}", &total.to_string())
@@ -695,6 +702,10 @@ fn notice_after(
     if profile.class == Class::Manual {
         let detail = ran.text_left.then(|| tr(lang, "toast.pasteManualText"));
         return Some((tr(lang, "toast.pasteManual").to_string(), detail));
+    }
+    // There is always at least one picture behind a paste, and this class drops them all.
+    if profile.class == Class::TextOnly {
+        return Some((tr(lang, "toast.pasteTextOnly").to_string(), None));
     }
     // Whatever the class: one-picture mode and the rich-HTML fallback join the set too.
     let cramped = (*shape == Shape::Picture && cramped).then(|| tr(lang, "toast.pictureCramped"));
@@ -861,6 +872,11 @@ fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
         profile.class,
         decision.steps.len()
     );
+    // A plain text editor and no comments: no key press would do anything.
+    if decision.steps.is_empty() && profile.class == Class::TextOnly {
+        crate::notice::toast(app, tr(lang, "toast.pasteNoText"));
+        return Ok("paste_fail_nothing");
+    }
 
     // No "building" notice: showing the notice window can activate it and take the focus from the target.
     let (contents, cramped) = build_contents(app, &source, &decision.shape, &decision.text, html)?;
@@ -875,7 +891,7 @@ fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
         Some((text, None)) => crate::notice::toast(app, &text),
         None => {}
     }
-    if ran.stopped.is_some() {
+    if ran.stopped.is_some() || ran.cancelled {
         return Ok("paste_fail_window_changed");
     }
     if ran.text_left && profile.class != Class::Manual {
@@ -1015,10 +1031,17 @@ mod tests {
     }
 
     /// The three paste orders before paste targets existed.
-    const CONTENT_ONLY: [Act; 2] = [Act::Put(0), Act::Paste];
-    const TEXT_THEN_CONTENT: [Act; 6] =
-        [Act::PutText { transient: true }, Act::Paste, Act::Pause, Act::Put(0), Act::CheckFocus, Act::Paste];
-    const CONTENT_THEN_TEXT: [Act; 4] = [Act::Put(0), Act::Paste, Act::Pause, Act::LeaveText];
+    const CONTENT_ONLY: [Act; 3] = [Act::Put(0), Act::CheckFocus, Act::Paste];
+    const TEXT_THEN_CONTENT: [Act; 7] = [
+        Act::PutText { transient: true },
+        Act::CheckFocus,
+        Act::Paste,
+        Act::Pause,
+        Act::Put(0),
+        Act::CheckFocus,
+        Act::Paste,
+    ];
+    const CONTENT_THEN_TEXT: [Act; 5] = [Act::Put(0), Act::CheckFocus, Act::Paste, Act::Pause, Act::LeaveText];
 
     fn letters(n: usize) -> Vec<char> {
         (0..n).map(|i| (b'A' + i as u8) as char).collect()
@@ -1080,6 +1103,8 @@ mod tests {
         for (app, title) in [
             ("slack.exe", None),
             ("Code.exe", None),
+            ("notepad++.exe", None),
+            ("com.apple.TextEdit", None),
             ("chrome.exe", Some("Inbox - Gmail - Google Chrome")),
             ("chrome.exe", Some("Chat - Claude - Google Chrome")),
             ("firefox.exe", Some("Page \u{2014} Mozilla Firefox")),
@@ -1156,28 +1181,36 @@ mod tests {
 
         let gmail = planned("gmail");
         let each = |k| [Act::Pause, Act::Put(k), Act::CheckFocus, Act::Paste];
-        let text = vec![Act::PutText { transient: true }, Act::Paste];
+        let text = vec![Act::PutText { transient: true }, Act::CheckFocus, Act::Paste];
         let expected = [text, each(0).to_vec(), each(1).to_vec(), each(2).to_vec()].concat();
         assert_eq!(set_acts(&gmail, 3, "A1 x"), expected);
-        assert_eq!(set_acts(&gmail, 2, ""), [vec![Act::Put(0), Act::Paste], each(1).to_vec()].concat());
+        assert_eq!(set_acts(&gmail, 2, ""), [CONTENT_ONLY.to_vec(), each(1).to_vec()].concat());
         let many = decide(Lang::En, &gmail, Some(&letters(26)), "A1 x", true, false);
         assert_eq!(acts(&many.steps).iter().filter(|a| **a == Act::Paste).count(), 1 + plan::SEQUENTIAL_MAX);
 
         let notepad = planned("text_editor");
-        assert_eq!(set_acts(&notepad, 3, "A1 x"), [Act::PutText { transient: false }, Act::Paste], "the result");
+        let text = [Act::PutText { transient: false }, Act::CheckFocus, Act::Paste];
+        assert_eq!(set_acts(&notepad, 3, "A1 x"), text, "the result");
         assert!(set_acts(&notepad, 3, "").is_empty());
     }
 
     #[test]
-    fn every_key_press_after_the_first_checks_the_window() {
+    fn every_key_press_checks_the_window() {
         let late_text = acts(&[Step::Content(0), Step::Text]);
-        let expected =
-            [Act::Put(0), Act::Paste, Act::Pause, Act::PutText { transient: false }, Act::CheckFocus, Act::Paste];
+        let expected = [
+            Act::Put(0),
+            Act::CheckFocus,
+            Act::Paste,
+            Act::Pause,
+            Act::PutText { transient: false },
+            Act::CheckFocus,
+            Act::Paste,
+        ];
         assert_eq!(late_text, expected);
         for steps in [vec![Step::Text, Step::Content(0), Step::Content(1)], vec![Step::Content(0), Step::Text]] {
             let acts = acts(&steps);
             let presses = acts.iter().enumerate().filter(|(_, act)| **act == Act::Paste).map(|(i, _)| i);
-            for i in presses.skip(1) {
+            for i in presses {
                 assert_eq!(acts[i - 1], Act::CheckFocus, "{steps:?}");
                 assert!(matches!(acts[i - 2], Act::Put(_) | Act::PutText { .. }), "written before the check");
             }
@@ -1191,10 +1224,14 @@ mod tests {
             notice_after(Lang::En, ran, target, &target.profile, shape, snapshots, cramped)
         };
         let went = Ran::default();
-        let stopped = |done, total| Ran { stopped: Some((done, total)), text_left: false };
+        let stopped = |done, total| Ran { stopped: Some((done, total)), ..Ran::default() };
         let text = |key: &str| Some((tr(Lang::En, key).to_string(), None));
         assert_eq!(notice(&went, target::UNKNOWN, &Shape::Files, 3, false), None);
         assert_eq!(notice(&stopped(0, 1), target::UNKNOWN, &Shape::Files, 3, false), text("toast.windowChanged"));
+        let cancelled = Ran { cancelled: true, ..Ran::default() };
+        assert_eq!(notice(&cancelled, target::UNKNOWN, &Shape::Files, 3, false), text("toast.pasteCancelled"));
+        assert_eq!(notice(&went, "text_editor", &Shape::None, 3, false), text("toast.pasteTextOnly"));
+        assert_eq!(notice(&cancelled, "text_editor", &Shape::None, 3, false), text("toast.pasteCancelled"));
         assert_eq!(
             notice(&stopped(2, 10), "gmail", &Shape::Each, 10, false).unwrap().0,
             "The window changed, paste stopped: 2 of 10 pasted"

@@ -46,6 +46,13 @@ pub fn toast_error(app: &AppHandle, text: &str, detail: Option<&str>) {
     show(app, NoticePayload::Toast { text: text.to_string(), detail: detail.map(str::to_string), error: true });
 }
 
+/// `toast_error` that blocks until shown; false when it was dropped (a capture is running, no window). Never on
+/// the main thread.
+#[cfg(windows)] // Only the Windows hotkey conflict warning needs to know.
+pub fn toast_error_now(app: &AppHandle, text: &str, detail: Option<&str>) -> bool {
+    show_now(app, NoticePayload::Toast { text: text.to_string(), detail: detail.map(str::to_string), error: true })
+}
+
 pub fn nudge(app: &AppHandle, index: u32, captures: u32) {
     show(app, NoticePayload::Nudge { index, captures });
 }

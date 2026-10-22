@@ -131,6 +131,7 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
         Ok(finished) => finished,
         Err(err) => {
             log::error!("{:?} failed: {err}", meta.action);
+            crate::telemetry::count("finish_failed");
             let mut ov = state.overlay.lock().unwrap();
             if ov.capture_id == meta.capture_id {
                 ov.finishing = false;
@@ -138,6 +139,7 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
             return Err(err);
         }
     };
+    crate::telemetry::finished(&meta, &marks);
 
     // Cancel ignores a running finish, but a destroyed overlay still ends the capture; then a new capture may
     // already be on screen and must not be hidden or have its letter taken.
@@ -316,6 +318,7 @@ pub fn after_set_changed(app: &AppHandle) {
 /// Strip "Copy all": the set becomes what smart paste pastes, even if a single copy came after it.
 pub fn copy_all(app: &AppHandle) -> Result<(), String> {
     copy_set_to_clipboard(app)?;
+    crate::telemetry::count("set_copy_all");
     set_last_copy(app, None);
     crate::notice::toast(app, tr(app.state::<AppState>().lang(), "toast.copiedAll"));
     Ok(())
@@ -344,6 +347,7 @@ pub fn save_all(app: &AppHandle) -> Result<usize, String> {
         export::save_unique(&dir, &format!("{stem}_{}", snap.letter), "png", &bytes).map_err(|e| e.to_string())?;
     }
     if !snapshots.is_empty() {
+        crate::telemetry::count("set_save_all");
         crate::notice::toast_with_detail(app, tr(state.lang(), "toast.saved"), &dir.to_string_lossy());
         record_and_maybe_nudge(app, 0);
     }
@@ -355,6 +359,7 @@ pub fn clear_set(app: &AppHandle) {
     let cleared = state.session.lock().unwrap().take();
     if let Some(session) = cleared {
         log::info!("set {} cleared", session.id);
+        crate::telemetry::count("set_cleared");
         delete_later(app, session.dir);
     }
     after_set_changed(app);

@@ -165,6 +165,7 @@ pub fn begin_capture(app: &AppHandle) {
     if !state.overlay.lock().unwrap().request_capture() {
         return;
     }
+    crate::telemetry::count("captures_started");
     let notice_hidden = crate::notice::hide_for_capture(app);
     let app = app.clone();
     std::thread::spawn(move || run_capture(&app, notice_hidden));
@@ -173,6 +174,7 @@ pub fn begin_capture(app: &AppHandle) {
 fn run_capture(app: &AppHandle, notice_hidden: bool) {
     let state = app.state::<AppState>();
     if !capture::has_permission() {
+        crate::telemetry::count("capture_permission_denied");
         capture::request_permission();
         state.overlay.lock().unwrap().active = false;
         crate::windows_ui::open_onboarding(app);
@@ -182,6 +184,7 @@ fn run_capture(app: &AppHandle, notice_hidden: bool) {
         wait_for_screen_update();
     }
     let monitors = capture::monitors(app);
+    crate::telemetry::monitors_seen(&monitors);
     let results = capture::capture_all(&monitors);
     let cursor = cursor_point(app);
     ensure_windows(app, &monitors);
@@ -236,6 +239,7 @@ fn run_capture(app: &AppHandle, notice_hidden: bool) {
         hide_all(app);
         let lang = state.lang();
         if denied {
+            crate::telemetry::count("capture_permission_denied");
             let hint = crate::i18n::tr(lang, "toast.screenPermissionHint");
             crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.screenPermissionOff"), Some(hint));
             // Once per run: repeated hotkey presses must not keep pulling System Settings to the front.
@@ -246,6 +250,7 @@ fn run_capture(app: &AppHandle, notice_hidden: bool) {
                 log::error!("could not open the Screen Recording settings: {err}");
             }
         } else {
+            crate::telemetry::count("capture_failed");
             crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.captureFailed"), None);
         }
         return;
@@ -266,6 +271,7 @@ fn run_capture(app: &AppHandle, notice_hidden: bool) {
         };
         if stuck {
             log::error!("no overlay became ready within {READY_TIMEOUT:?}, cancelling capture");
+            crate::telemetry::count("overlay_not_ready");
             hide_all(&app);
         }
     });
@@ -390,6 +396,7 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     }
     if let Some(elapsed) = elapsed {
         log::info!("overlay {label} visible {:.0} ms after hotkey", elapsed.as_secs_f64() * 1000.0);
+        crate::telemetry::metric(label, "hotkeyToVisibleMs", elapsed.as_secs_f64() * 1000.0);
     }
 }
 

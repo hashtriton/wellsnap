@@ -88,7 +88,9 @@ fn apply_now(app: &AppHandle) {
         }) {
             Ok(()) => status.capture_registered = true,
             Err(err) => {
-                log::error!("capture hotkey {} not registered: {err}", settings.capture_hotkey);
+                // Another program holds the key: a fact about the machine, counted, not reported as a bug.
+                log::warn!("capture hotkey {} not registered: {err}", settings.capture_hotkey);
+                crate::telemetry::count("hotkey_failures");
                 status.capture_error = Some(err.to_string());
             }
         }

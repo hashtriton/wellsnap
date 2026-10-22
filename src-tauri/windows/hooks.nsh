@@ -1,8 +1,8 @@
 ; WellSnap NSIS hooks (bundle.windows.nsis.installerHooks in tauri.windows.conf.json).
 ;
 ; On uninstall: if WellSnap turned off "Use the Print screen key to open screen capture", put the previous
-; value back exactly like printscreen::restore() does, then remove HKCU\Software\WellSnap and the cache of
-; snapshot-set files (screenshots that may still sit there for up to a day).
+; value back exactly like printscreen::restore() does, then remove HKCU\Software\WellSnap, the cache of
+; snapshot-set files (screenshots that may still sit there for up to a day) and the telemetry folder.
 ; Runs after the files are removed, so an uninstall cancelled at the "app is running" prompt changes nothing.
 ; Skipped in update mode (/UPDATE), when the uninstaller runs only to replace the files.
 
@@ -31,6 +31,8 @@
     ; app_cache_dir()/paste in lib.rs; settings in the config folder stay unless the user ticks "delete app data".
     SetShellVarContext current
     RMDir /r "$LOCALAPPDATA\${BUNDLEID}\paste"
+    ; Unsent crash reports and minidumps (telemetry/paths.rs); an update keeps them for the next start.
+    RMDir /r "$LOCALAPPDATA\${BUNDLEID}\telemetry"
     ClearErrors
     Pop $1
     Pop $0

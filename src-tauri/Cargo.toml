@@ -1,0 +1,125 @@
+[package]
+name = "wellsnap"
+version = "0.1.0"
+description = "WellSnap: screenshots with arrows, blur and numbered notes"
+authors = ["WellDone"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/hashtriton/wellsnap"
+edition = "2024"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name (cargo issue 8519 on Windows).
+name = "wellsnap_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Enables the WELLSNAP_BENCH latency benchmark in release builds (always on in debug builds).
+bench = []
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2.7"
+tauri-plugin-global-shortcut = "2.4"
+tauri-plugin-autostart = "2.7"
+tauri-plugin-single-instance = "2.5"
+tauri-plugin-log = "2.10"
+tauri-plugin-dialog = "2.8"
+tauri-plugin-updater = "2.14"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+png = "0.18"
+urlencoding = "2"
+sys-locale = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+# Same version as the one wry uses, so its interface types are interchangeable with ours.
+webview2-com = "0.39"
+# The autostart plugin's own dependency, used directly for its CurrentUser mode (see autostart.rs).
+auto-launch = "0.6"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Win32_Security",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS platform layer (ScreenCaptureKit capture, pasteboard, synthetic paste, window levels). Pure binding
+# crates, the same major versions tao and wry use; features are limited to the APIs the code calls.
+objc2 = "0.6"
+block2 = "0.6"
+# The keyboard layout lookup for synthetic Cmd+V has to run on the main queue.
+dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSData",
+  "NSError",
+  "NSString",
+  "NSURL",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFData", "CFString"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+  "std",
+  "CGBitmapContext",
+  "CGColorSpace",
+  "CGContext",
+  "CGDataProvider",
+  "CGDirectDisplay",
+  "CGEvent",
+  "CGEventSource",
+  "CGEventTypes",
+  "CGImage",
+  "CGRemoteOperation",
+  "CGWindow",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "libc",
+  "NSBitmapImageRep",
+  "NSGraphics",
+  "NSImageRep",
+  "NSPasteboard",
+  "NSPasteboardItem",
+  "NSResponder",
+  "NSRunningApplication",
+  "NSWindow",
+  "NSWorkspace",
+] }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "libc",
+  "objc2-core-foundation",
+  "objc2-core-graphics",
+  "SCError",
+  "SCScreenshotManager",
+  "SCShareableContent",
+  "SCStream",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

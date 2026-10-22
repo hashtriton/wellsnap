@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Frontend tests
+        run: npx vitest run
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      # Development happens on Windows, where the macOS code can be type-checked but not linked: link the
+      # real app binary here so a missing framework symbol (ScreenCaptureKit, AppKit) fails CI.
+      - name: Build
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo build

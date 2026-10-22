@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # The tag, tauri.conf.json, Cargo.toml and package.json must name the same version: the updater compares
+      # the running version with latest.json, so a mismatch would offer the same release again and again.
+      - name: Check version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          pkg="$(node -p "require('./package.json').version")"
+          cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
+          echo "tag $tag, tauri.conf.json $conf, package.json $pkg, Cargo.toml $cargo"
+          if [ "$tag" != "$conf" ] || [ "$tag" != "$pkg" ] || [ "$tag" != "$cargo" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the version in tauri.conf.json ($conf), package.json ($pkg) and src-tauri/Cargo.toml ($cargo)"
+            exit 1
+          fi
+
+      # release-notes/vX.Y.Z.md becomes the release text and the latest.json notes the app shows after the update
+      # (its "### Русский" and "### English" sections). Commit it before tagging; editing the draft later does
+      # not change latest.json.
+      - name: Read release notes
+        id: notes
+        shell: bash
+        run: |
+          file="release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -s "$file" ]; then
+            echo "::error::$file is missing or empty; copy release-notes/TEMPLATE.md and commit it before tagging"
+            exit 1
+          fi
+          { echo "body<<WELLSNAP_NOTES_EOF"; cat "$file"; echo; echo "WELLSNAP_NOTES_EOF"; } >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Secrets go to GITHUB_ENV in the NAME<<DELIMITER form, so multi-line values survive (a base64 certificate
+      # wrapped at 64 columns, a .p8 key). The Tauri bundler treats a variable that is set but empty as
+      # configured, so only the secrets that exist are exported. It imports APPLE_CERTIFICATE (base64 of the
+      # Developer ID Application .p12; line breaks and spaces are removed here) into a temporary keychain and
+      # takes the signing identity from it.
+      #
+      # Without APPLE_CERTIFICATE the macOS job fails. An ad hoc signature changes with every build and macOS
+      # ties the Screen Recording and Accessibility grants to it, so every auto-update would silently revoke
+      # both while System Settings still shows them as on; an ad hoc DMG is not notarized either, so Gatekeeper
+      # blocks the first launch. For a test build without a certificate, set the repository variable
+      # ALLOW_ADHOC_MAC to true: the macOS app is then signed ad hoc and built without updater artifacts, and
+      # this job does not upload latest.json, so installed macOS copies are never offered that build.
+      - name: Configure Apple signing
+        id: apple
+        if: runner.os == 'macOS'
+        env:
+          ALLOW_ADHOC_MAC: ${{ vars.ALLOW_ADHOC_MAC }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          export_if_set() {
+            if [ -n "${!1}" ]; then
+              { echo "$1<<WELLSNAP_ENV_EOF"; printf '%s\n' "${!1}"; echo "WELLSNAP_ENV_EOF"; } >> "$GITHUB_ENV"
+            fi
+          }
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            if [ "$ALLOW_ADHOC_MAC" != "true" ]; then
+              echo "::error::APPLE_CERTIFICATE is not set. Ad hoc builds lose the Screen Recording and Accessibility grants on every update; set the repository variable ALLOW_ADHOC_MAC=true to build one anyway"
+              exit 1
+            fi
+            echo "::warning::ALLOW_ADHOC_MAC: the macOS build is signed ad hoc, not notarized and not offered by the updater"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            printf '%s\n' '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/adhoc.conf.json"
+            echo "extra_args=--config $RUNNER_TEMP/adhoc.conf.json" >> "$GITHUB_OUTPUT"
+            echo "adhoc=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          APPLE_CERTIFICATE="$(printf '%s' "$APPLE_CERTIFICATE" | tr -d '[:space:]')"
+          export_if_set APPLE_CERTIFICATE
+          export_if_set APPLE_CERTIFICATE_PASSWORD
+          export_if_set APPLE_SIGNING_IDENTITY
+          # Notarization: an App Store Connect API key (preferred) or an Apple ID with an app-specific password.
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_PRIVATE_KEY" ]; then
+            key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+            printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$key_path"
+            export_if_set APPLE_API_KEY
+            export_if_set APPLE_API_ISSUER
+            echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+          elif [ -n "$APPLE_ID" ]; then
+            export_if_set APPLE_ID
+            export_if_set APPLE_PASSWORD
+            export_if_set APPLE_TEAM_ID
+          else
+            echo "::warning::No notarization credentials: the macOS build is signed but not notarized"
+          fi
+
+      # Updater signing is required: tauri.conf.json sets bundle.createUpdaterArtifacts and an updater pubkey,
+      # so without TAURI_SIGNING_PRIVATE_KEY tauri build stops with "A public key has been found, but no private
+      # key" after a full build. Fail here instead. TAURI_SIGNING_PRIVATE_KEY_PASSWORD is only needed when the
+      # key has a password; in CI the CLI uses an empty one otherwise.
+      - name: Configure updater signing
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          export_if_set() {
+            if [ -n "${!1}" ]; then
+              { echo "$1<<WELLSNAP_ENV_EOF"; printf '%s\n' "${!1}"; echo "WELLSNAP_ENV_EOF"; } >> "$GITHUB_ENV"
+            fi
+          }
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set, but tauri.conf.json enables createUpdaterArtifacts with an updater pubkey; tauri build would fail after bundling"
+            exit 1
+          fi
+          export_if_set TAURI_SIGNING_PRIVATE_KEY
+          export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: WellSnap ${{ github.ref_name }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} ${{ steps.apple.outputs.extra_args }}
+          uploadUpdaterJson: ${{ steps.apple.outputs.adhoc != 'true' }}

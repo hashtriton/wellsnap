@@ -1,0 +1,341 @@
+/* The strip window is 132 css px wide and 132 + 92 * min(count, 6) tall (src-tauri/src/windows_ui.rs).
+   Fixed parts: border 2 + padding 10 + header 26 + gaps 8 + footer 90 = 136 px; the list gets the rest,
+   at least 92 * count - 4 px for items of 86 px with 6 px gaps. Keep the sum when changing sizes. */
+
+:root {
+  /* A dark color-scheme would give the transparent window an opaque canvas. */
+  color-scheme: normal;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.strip {
+  --strip-bg: color-mix(in srgb, var(--surface) 93%, transparent);
+  --strip-line: color-mix(in srgb, var(--text) 12%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100vh;
+  padding: 5px;
+  border: 1px solid var(--strip-line);
+  border-radius: var(--radius-l);
+  background: var(--strip-bg);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.strip-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  flex: none;
+  padding: 0 3px;
+  cursor: default;
+}
+.strip-head > svg {
+  flex: none;
+}
+.strip-counts {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+.strip-counts > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strip-counts strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+.strip-counts span {
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.strip-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.strip-list::-webkit-scrollbar {
+  width: 4px;
+}
+.strip-list::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: var(--strip-line);
+}
+
+.strip-item {
+  position: relative;
+  flex: none;
+  height: 86px;
+}
+.strip-thumb {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--strip-line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  transition: border-color 0.12s ease;
+}
+.strip-item:hover .strip-thumb {
+  border-color: var(--accent);
+}
+.strip-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.strip-letter {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--mark);
+  color: var(--mark-contrast);
+  font-size: 11px;
+  font-weight: 800;
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.strip-comments {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: rgba(15, 17, 22, 0.74);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.strip-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 17, 22, 0.74);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    background-color 0.12s ease;
+}
+.strip-item:hover .strip-remove,
+.strip-remove:focus-visible {
+  opacity: 1;
+}
+.strip-remove:hover {
+  background: var(--danger);
+}
+
+.strip-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+}
+
+.strip-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(20, 40, 120, 0.3);
+  transition: background-color 0.12s ease;
+}
+.strip-primary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.strip-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.strip-tools {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.strip-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--strip-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.strip-tool:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.strip-tool-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.strip-primary:disabled,
+.strip-tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.strip-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 4px;
+  height: 28px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 1.1;
+  text-align: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+.strip-hint:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.strip-hint kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--strip-line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.strip-hint span {
+  white-space: nowrap;
+}
+.strip-hint-off {
+  opacity: 0.55;
+}
+.strip-hint-off kbd {
+  text-decoration: line-through;
+}
+.strip-hint-error {
+  color: var(--danger);
+  cursor: default;
+}
+.strip-hint-error:hover {
+  background: transparent;
+  color: var(--danger);
+}
+
+.strip-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+.strip-confirm > span {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.strip-confirm > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.strip-confirm button {
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.strip-confirm-yes {
+  border: 0;
+  background: var(--danger);
+  color: #fff;
+}
+.strip-confirm-yes:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+.strip-confirm-no {
+  border: 1px solid var(--strip-line);
+  background: var(--surface);
+  color: var(--text);
+}
+.strip-confirm-no:hover {
+  background: var(--surface-hover);
+}
+
+.strip .spinner {
+  width: 13px;
+  height: 13px;
+}

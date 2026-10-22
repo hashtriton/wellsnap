@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Folder picker for the save location in Settings",
+  "windows": ["settings"],
+  "permissions": [
+    "dialog:allow-open"
+  ]
+}

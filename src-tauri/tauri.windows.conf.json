@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Russian", "English"],
+        "displayLanguageSelector": false,
+        "installerHooks": "./windows/hooks.nsh",
+        "sidebarImage": "./windows/nsis-sidebar.bmp",
+        "headerImage": "./windows/nsis-header.bmp"
+      }
+    }
+  }
+}

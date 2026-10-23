@@ -28,24 +28,24 @@ describe("tool prefs", () => {
     expect(parsePrefs(null)).toEqual(defaultPrefs());
   });
 
-  it("keeps captions after drawing off by default, per tool", () => {
-    expect(defaultPrefs().captions).toEqual({ arrow: false, rect: false });
+  it("keeps captions after drawing on by default, per tool", () => {
+    expect(defaultPrefs().captions).toEqual({ arrow: true, rect: true });
     // Settings saved before the switch existed.
-    expect(parsePrefs({ arrow: { color: "#1E88E5", size: 2 }, blurMode: "solid" }).captions).toEqual({ arrow: false, rect: false });
+    expect(parsePrefs({ arrow: { color: "#1E88E5", size: 2 }, blurMode: "solid" }).captions).toEqual({ arrow: true, rect: true });
   });
 
   it("accepts only booleans for the caption switches", () => {
-    expect(parsePrefs({ captions: { arrow: true, rect: "yes" } }).captions).toEqual({ arrow: true, rect: false });
-    expect(parsePrefs({ captions: { arrow: 1, rect: null, pencil: true } }).captions).toEqual({ arrow: false, rect: false });
-    expect(parsePrefs({ captions: "on" }).captions).toEqual({ arrow: false, rect: false });
+    expect(parsePrefs({ captions: { arrow: false, rect: "no" } }).captions).toEqual({ arrow: false, rect: true });
+    expect(parsePrefs({ captions: { arrow: 0, rect: null, pencil: false } }).captions).toEqual({ arrow: true, rect: true });
+    expect(parsePrefs({ captions: "off" }).captions).toEqual({ arrow: true, rect: true });
   });
 
   it("round-trips the caption switches", () => {
     const p = defaultPrefs();
-    p.captions.rect = true;
+    p.captions.rect = false;
     const saved = serializePrefs(p);
-    expect(saved.captions).toEqual({ arrow: false, rect: true });
-    expect(parsePrefs(JSON.parse(JSON.stringify(saved))).captions).toEqual({ arrow: false, rect: true });
+    expect(saved.captions).toEqual({ arrow: true, rect: false });
+    expect(parsePrefs(JSON.parse(JSON.stringify(saved))).captions).toEqual({ arrow: true, rect: false });
   });
 
   it("steps through S/M/L and clamps", () => {

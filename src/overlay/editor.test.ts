@@ -159,13 +159,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Frame shown, selection 100..300, one rectangle drawn with the rect tool (still active). */
+/** Frame shown, selection 100..300, one plain rectangle drawn with the rect tool (still active). */
 function withAnnotation(): void {
   editor.onFrame(payload, new Uint8ClampedArray(0));
   drag([100, 100], [300, 300]);
   editor.setTool("rect");
   drag([150, 150], [250, 250]);
-  expect(editor.getView().canUndo).toBe(true);
+  // The caption input that opens after drawing, closed empty: the rectangle stays plain.
+  editor.closeInput();
+  expect(editor.getView()).toMatchObject({ canUndo: true, input: null, markCount: 0 });
 }
 
 describe("ready reporting", () => {
@@ -337,38 +339,53 @@ describe("captions after drawing", () => {
 
   function captionsOn(tool: "arrow" | "rect"): void {
     editor.setTool(tool);
-    key("KeyT", false, "T", { shiftKey: true });
     expect(editor.getView().captions).toBe(true);
   }
 
-  it("are off by default", () => {
+  function captionsOff(tool: "arrow" | "rect"): void {
+    editor.setTool(tool);
+    key("KeyT", false, "T", { shiftKey: true });
+    expect(editor.getView().captions).toBe(false);
+  }
+
+  it("are on by default", () => {
     selectArea();
     editor.setTool("arrow");
-    expect(editor.getView().captions).toBe(false);
+    expect(editor.getView().captions).toBe(true);
     drag([150, 150], [250, 250]);
-    expect(editor.getView()).toMatchObject({ input: null, markCount: 0, canUndo: true });
+    expect(editor.getView().input).toMatchObject({ kind: "mark", caption: true, stoppable: true, label: "1" });
+    editor.closeInput();
     editor.setTool("select");
     expect(editor.getView().captions).toBeNull();
   });
 
-  it("turn on with Shift+T for the active shape tool and are saved with the tool prefs", () => {
+  it("turn off with Shift+T for the active shape tool and are saved with the tool prefs", () => {
     selectArea();
     key("KeyT", false, "T", { shiftKey: true });
     expect(editor.getView().captions).toBeNull();
     vi.advanceTimersByTime(600);
     expect(api.updateSettings).not.toHaveBeenCalled();
 
-    captionsOn("rect");
+    captionsOff("rect");
     editor.setTool("arrow");
-    expect(editor.getView().captions).toBe(false);
+    expect(editor.getView().captions).toBe(true);
     vi.advanceTimersByTime(499);
     expect(api.updateSettings).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(api.updateSettings).toHaveBeenCalledTimes(1);
-    expect(lastPrefs().captions).toEqual({ arrow: false, rect: true });
+    expect(lastPrefs().captions).toEqual({ arrow: true, rect: false });
     editor.setTool("rect");
     key("KeyT", false, "T", { shiftKey: true });
-    expect(editor.getView().captions).toBe(false);
+    expect(editor.getView().captions).toBe(true);
+    drag([150, 150], [250, 250]);
+    expect(editor.getView().input).toMatchObject({ caption: true });
+  });
+
+  it("leave the shape plain when turned off", () => {
+    selectArea();
+    captionsOff("arrow");
+    drag([150, 150], [250, 250]);
+    expect(editor.getView()).toMatchObject({ input: null, markCount: 0, canUndo: true });
   });
 
   it("put the shape and its text in one undo step and send the text as a mark", async () => {
@@ -431,7 +448,7 @@ describe("captions after drawing", () => {
 
   it("only commit on a press when the input was not opened by drawing", () => {
     selectArea();
-    editor.setTool("arrow");
+    captionsOff("arrow");
     drag([150, 150], [250, 250]);
     dblclick(200, 200);
     expect(editor.getView().input).toMatchObject({ caption: true, stoppable: false, label: "1" });
@@ -557,7 +574,7 @@ describe("captions after drawing", () => {
     editor.stopCaptions();
     expect(editor.getView()).toMatchObject({ input: null, captions: false, markCount: 1 });
     vi.advanceTimersByTime(500);
-    expect(lastPrefs().captions).toEqual({ arrow: false, rect: false });
+    expect(lastPrefs().captions).toEqual({ arrow: false, rect: true });
     drag([150, 200], [250, 280]);
     expect(editor.getView()).toMatchObject({ input: null, markCount: 1 });
     await editor.finish("copy");
@@ -566,17 +583,17 @@ describe("captions after drawing", () => {
 
   it("are not reverted by a settings event while the switch is being saved", async () => {
     selectArea();
-    captionsOn("arrow");
+    captionsOff("arrow");
     editor.applySettings(settings({}));
-    expect(editor.getView().captions).toBe(true);
+    expect(editor.getView().captions).toBe(false);
     vi.advanceTimersByTime(500);
     expect(api.updateSettings).toHaveBeenCalledTimes(1);
     // Sent but not confirmed yet: an event from before the save still carries the old switch.
     editor.applySettings(settings({}));
-    expect(editor.getView().captions).toBe(true);
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    editor.applySettings(settings({ captions: { arrow: false, rect: true } }));
     expect(editor.getView().captions).toBe(false);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    editor.applySettings(settings({ captions: { arrow: true, rect: false } }));
+    expect(editor.getView().captions).toBe(true);
   });
 });
 
@@ -683,7 +700,6 @@ describe("annotation handles", () => {
     editor.onFrame(payload, new Uint8ClampedArray(0));
     drag([100, 100], [300, 300]);
     editor.setTool("arrow");
-    key("KeyT", false, "T", { shiftKey: true });
     drag([150, 150], [250, 250]);
     editor.setInputValue("start");
     editor.submitInput();

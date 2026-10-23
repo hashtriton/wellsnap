@@ -39,7 +39,7 @@ const DEFAULT_COLORS: Record<DrawTool, string> = {
 export function defaultPrefs(): ToolPrefs {
   const tools = {} as Record<DrawTool, ToolPref>;
   for (const t of DRAW_TOOLS) tools[t] = { color: DEFAULT_COLORS[t], size: 4 };
-  return { tools, blurMode: "mosaic", textPlate: false, captions: { arrow: false, rect: false } };
+  return { tools, blurMode: "mosaic", textPlate: false, captions: { arrow: true, rect: true } };
 }
 
 const isHex = (v: unknown): v is string => typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);

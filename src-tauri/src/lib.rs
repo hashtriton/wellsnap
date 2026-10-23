@@ -125,6 +125,7 @@ pub fn run() {
             commands::overlay_page_loaded,
             commands::overlay_ready,
             commands::overlay_cancel,
+            commands::overlay_region,
             commands::overlay_finish,
             commands::log_metric,
             commands::get_settings,

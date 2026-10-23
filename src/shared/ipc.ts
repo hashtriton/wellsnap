@@ -96,6 +96,15 @@ export interface MonitorInfo {
   scale: number;
 }
 
+/** Part of an overlay window in physical px from its top-left corner, with the corner radius. */
+export interface RegionRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  r: number;
+}
+
 export interface PreparePayload {
   captureId: number;
   label: string;
@@ -275,6 +284,8 @@ export interface SentItem {
 export const api = {
   overlayReady: (captureId: number) => invoke<void>("overlay_ready", { captureId }),
   overlayCancel: () => invoke<void>("overlay_cancel"),
+  /** Windows: the part of the overlay that stays on screen; null for all of it (see overlay/live.ts). */
+  overlayRegion: (captureId: number, rects: RegionRect[] | null) => invoke<void>("overlay_region", { captureId, rects }),
   /** `image` is the encoded PNG/JPEG; metadata travels in a header to keep the body raw. */
   overlayFinish: (image: Uint8Array, meta: FinishMeta) =>
     invoke<void>("overlay_finish", image, { headers: { "x-meta": encodeURIComponent(JSON.stringify(meta)) } }),

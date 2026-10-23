@@ -49,7 +49,7 @@ const GLASS = "rgba(22, 24, 30, 0.92)";
 const MIN_SELECTION = 5;
 const HANDLE_CSS = 8;
 /** Half of the 16 px hit zone around handles. */
-const HIT_CSS = 8;
+export const HIT_CSS = 8;
 const LOUPE_PIXELS = 15;
 const LOUPE_CELL_CSS = 10;
 const SIZE_LABEL_MS = 1500;
@@ -109,6 +109,8 @@ export interface Notice {
 
 export interface View {
   phase: Phase;
+  /** Capture the frame belongs to; null before the first frame and after a reset. */
+  captureId: number | null;
   scale: number;
   /** Monitor size in CSS px. */
   screen: Size;
@@ -304,6 +306,7 @@ export class Editor {
     const list = this.history.current;
     return {
       phase: this.phase,
+      captureId: p?.captureId ?? null,
       scale: s,
       screen: p ? { w: p.width / s, h: p.height / s } : { w: window.innerWidth, h: window.innerHeight },
       selection: this.selection && scaleRect(this.selection, 1 / s),

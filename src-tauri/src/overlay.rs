@@ -1,12 +1,14 @@
 //! Capture overlays: one borderless, always-on-top window per monitor, created hidden and reused.
 //! Flow: hotkey -> capture every monitor -> each overlay receives its frozen frame -> `overlay_ready` -> show.
 //! Frame hand-off: WebView2 shared memory on Windows (webview_win.rs), the `wsnap` protocol elsewhere.
+//! Windows: once the area is chosen, the overlay is clipped to the snapshot and its controls and the rest of
+//! the screen is live again (`set_region`, src/overlay/live.ts).
 //! Overlays left unused for `IDLE_RELEASE_AFTER` are destroyed to free their webviews and rebuilt on the next
 //! capture.
 
 use crate::capture::{self, Frame, MonitorInfo};
 use crate::state::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -48,6 +50,9 @@ pub struct OverlayState {
     /// Idle overlays are being destroyed; a capture requested meanwhile starts right after.
     pub releasing: bool,
     pub pending_capture: bool,
+    /// Windows: the overlay whose area is chosen. The other overlays are hidden, and it is clipped to its
+    /// snapshot except while the area is moved or resized.
+    pub live: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -75,6 +80,17 @@ pub struct PreparePayload {
     pub set_count: usize,
     pub set_full: bool,
     pub capture_ms: f64,
+}
+
+/// Part of an overlay window that stays on screen: physical px from its top-left corner, corner radius.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct RegionRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub r: i32,
 }
 
 pub fn label_for(m: &MonitorInfo) -> String {
@@ -163,6 +179,7 @@ pub fn on_page_loaded(app: &AppHandle, label: &str) {
 pub fn begin_capture(app: &AppHandle) {
     let state = app.state::<AppState>();
     if !state.overlay.lock().unwrap().request_capture() {
+        focus_live(app);
         return;
     }
     crate::telemetry::count("captures_started");
@@ -374,7 +391,8 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     let state = app.state::<AppState>();
     let (elapsed, monitor, focus) = {
         let mut ov = state.overlay.lock().unwrap();
-        if !ov.active || ov.capture_id != capture_id {
+        // A monitor that was slow to get ready stays hidden once the area is chosen on another one.
+        if !ov.active || ov.capture_id != capture_id || ov.live.is_some() {
             return;
         }
         ov.shown.insert(label.to_string());
@@ -419,12 +437,81 @@ pub fn hide_all(app: &AppHandle) {
     // Give keyboard focus back to the app the user was in (the chat to paste into).
     #[cfg(target_os = "macos")]
     crate::macos::overlays_hidden(app);
-    let mut ov = state.overlay.lock().unwrap();
-    ov.active = false;
-    ov.finishing = false;
-    ov.frames.clear();
-    ov.shown.clear();
-    ov.last_used = Some(Instant::now());
+    let clipped = {
+        let mut ov = state.overlay.lock().unwrap();
+        ov.active = false;
+        ov.finishing = false;
+        ov.frames.clear();
+        ov.shown.clear();
+        ov.last_used = Some(Instant::now());
+        ov.live.take()
+    };
+    // Queued after the hide: the whole frame back on a visible window would flash.
+    #[cfg(windows)]
+    if let Some(win) = clipped.and_then(|label| app.get_webview_window(&label)) {
+        let _ = app.run_on_main_thread(move || apply_region(&win, None));
+    }
+    #[cfg(not(windows))]
+    let _ = clipped;
+}
+
+/// Windows: clips the overlay to `rects` once its area is chosen, so the rest of the screen is the live desktop
+/// again, and hides the overlays of the other monitors; None gives it the whole frozen frame back while the area
+/// is moved or resized. Other systems keep the frozen screen until the capture ends. Main thread only.
+pub fn set_region(app: &AppHandle, win: &tauri::WebviewWindow, capture_id: u64, rects: Option<Vec<RegionRect>>) {
+    #[cfg(windows)]
+    {
+        let others =
+            app.state::<AppState>().overlay.lock().unwrap().region_changed(win.label(), capture_id, rects.is_some());
+        let Some(others) = others else { return };
+        apply_region(win, rects.as_deref());
+        for label in others {
+            if let Some(other) = app.get_webview_window(&label) {
+                let _ = other.hide();
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, win, capture_id, rects);
+}
+
+/// Sets the window region, or removes it with None. On the main thread: the change reaches the window as messages.
+#[cfg(windows)]
+fn apply_region(win: &tauri::WebviewWindow, rects: Option<&[RegionRect]>) {
+    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_OR, SetWindowRgn};
+    let Ok(hwnd) = win.hwnd() else { return };
+    unsafe {
+        let region = rects.map(|rects| {
+            let region = CreateRectRgn(0, 0, 0, 0);
+            for r in rects {
+                // CreateRoundRectRgn leaves out the right and bottom edges, a pixel more than CreateRectRgn.
+                let part = if r.r > 0 {
+                    CreateRoundRectRgn(r.x, r.y, r.x + r.w + 1, r.y + r.h + 1, 2 * r.r, 2 * r.r)
+                } else {
+                    CreateRectRgn(r.x, r.y, r.x + r.w, r.y + r.h)
+                };
+                CombineRgn(Some(region), Some(region), Some(part), RGN_OR);
+                let _ = DeleteObject(part.into());
+            }
+            region
+        });
+        // A region the window accepted belongs to the system.
+        if SetWindowRgn(hwnd, region, true) == 0 {
+            log::warn!("could not set the region of {}", win.label());
+            if let Some(region) = region {
+                let _ = DeleteObject(region.into());
+            }
+        }
+    }
+}
+
+/// The capture key while a snapshot is open on a live screen: the user may have clicked into another window
+/// since, so the snapshot takes the keyboard again.
+fn focus_live(app: &AppHandle) {
+    let live = app.state::<AppState>().overlay.lock().unwrap().live.clone();
+    if let Some(win) = live.and_then(|label| app.get_webview_window(&label)) {
+        let _ = win.set_focus();
+    }
 }
 
 /// Overlay windows are closed by the OS too (Alt+F4 in a comment field, a crashed webview). A close request
@@ -553,6 +640,25 @@ impl OverlayState {
         self.releasing = false;
         std::mem::take(&mut self.pending_capture)
     }
+
+    /// Overlay `label` of capture `capture_id` was clipped to its snapshot, or given its whole frame back.
+    /// None: a late message from an ended capture or from a hidden overlay, to ignore. Otherwise the overlays to
+    /// hide: the other monitors, the first time the area is chosen.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn region_changed(&mut self, label: &str, capture_id: u64, clipped: bool) -> Option<Vec<String>> {
+        if !self.active || self.capture_id != capture_id || !self.shown.contains(label) {
+            return None;
+        }
+        match self.live.as_deref() {
+            Some(live) if live != label => None,
+            Some(_) => Some(Vec::new()),
+            None if !clipped => Some(Vec::new()),
+            None => {
+                self.live = Some(label.to_string());
+                Some(self.shown.iter().filter(|other| other.as_str() != label).cloned().collect())
+            }
+        }
+    }
 }
 
 /// The updater is about to replace the app: no capture may start until it exits or the install fails.
@@ -633,6 +739,31 @@ mod tests {
         assert!(ov.active && ov.started.is_some() && ov.last_used == ov.started);
         assert!(!ov.request_capture(), "one capture at a time");
         assert!(!ov.pending_capture, "a second press during a capture is dropped");
+    }
+
+    #[test]
+    fn choosing_the_area_hides_the_other_monitors_once() {
+        let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
+        ov.shown.extend(["overlay-0".to_string(), "overlay-1".to_string()]);
+        assert_eq!(ov.region_changed("overlay-0", 7, false), Some(vec![]), "still choosing: whole frame");
+        assert_eq!(ov.live, None);
+        assert_eq!(ov.region_changed("overlay-0", 7, true), Some(vec!["overlay-1".to_string()]));
+        assert_eq!(ov.live.as_deref(), Some("overlay-0"));
+        assert_eq!(ov.region_changed("overlay-0", 7, false), Some(vec![]), "the area is being resized");
+        assert_eq!(ov.region_changed("overlay-0", 7, true), Some(vec![]));
+        assert_eq!(ov.live.as_deref(), Some("overlay-0"), "kept while the area is resized");
+        assert_eq!(ov.region_changed("overlay-1", 7, false), None, "a hidden monitor");
+    }
+
+    #[test]
+    fn a_region_from_another_capture_is_ignored() {
+        let mut ov = OverlayState { active: true, capture_id: 8, ..Default::default() };
+        ov.shown.insert("overlay-0".into());
+        assert_eq!(ov.region_changed("overlay-0", 7, true), None, "the previous capture");
+        assert_eq!(ov.region_changed("overlay-1", 8, true), None, "not shown in this capture");
+        ov.active = false;
+        assert_eq!(ov.region_changed("overlay-0", 8, true), None, "the capture ended");
+        assert_eq!(ov.live, None);
     }
 
     #[test]

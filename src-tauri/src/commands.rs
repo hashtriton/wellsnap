@@ -40,6 +40,17 @@ pub fn overlay_cancel(app: AppHandle) {
     }
 }
 
+/// Windows: clips the overlay to its snapshot once the area is chosen (src/overlay/live.ts).
+#[tauri::command]
+pub fn overlay_region(
+    app: AppHandle,
+    window: WebviewWindow,
+    capture_id: u64,
+    rects: Option<Vec<crate::overlay::RegionRect>>,
+) {
+    crate::overlay::set_region(&app, &window, capture_id, rects);
+}
+
 /// Body: the encoded image (raw bytes). Header `x-meta`: URI-encoded JSON of `FinishMeta`.
 #[tauri::command]
 pub async fn overlay_finish(app: AppHandle, window: WebviewWindow, request: Request<'_>) -> Result<(), String> {

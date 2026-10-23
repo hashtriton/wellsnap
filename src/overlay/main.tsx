@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { api, events } from "../shared/ipc";
 import { Editor } from "./editor";
 import { listenForFrames } from "./frame";
+import { watchLiveRegion } from "./live";
 import { App } from "./ui/App";
 
 const root = document.getElementById("root")!;
@@ -24,3 +25,4 @@ api
   .catch(() => {});
 
 createRoot(root).render(<App editor={editor} />);
+watchLiveRegion(editor, root);

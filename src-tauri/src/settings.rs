@@ -71,6 +71,8 @@ pub struct Settings {
     pub capture_hotkey: String,
     /// Registered only while a snapshot set exists.
     pub smart_paste_hotkey: String,
+    /// Ctrl+V (Cmd+V) does smart paste while WellSnap's own copy is still on the clipboard (ctrl_v.rs).
+    pub ctrl_v_paste: bool,
     pub autostart: bool,
     /// None means the user's Desktop.
     pub save_dir: Option<String>,
@@ -111,6 +113,7 @@ impl Default for Settings {
             theme: Theme::System,
             capture_hotkey: default_capture_hotkey().to_string(),
             smart_paste_hotkey: default_smart_paste_hotkey().to_string(),
+            ctrl_v_paste: true,
             autostart: true,
             save_dir: None,
             image_format: ImageFormat::Png,

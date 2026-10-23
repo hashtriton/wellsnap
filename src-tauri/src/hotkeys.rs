@@ -35,6 +35,7 @@ pub fn suspend(app: &AppHandle) {
         if let Err(err) = app.global_shortcut().unregister_all() {
             log::warn!("unregister_all failed: {err}");
         }
+        crate::ctrl_v::sync(app, false);
         publish(app, HotkeyStatus::default());
     });
 }
@@ -117,6 +118,9 @@ fn apply_now(app: &AppHandle) {
             }
         }
     }
+    // Watched under the same condition as the smart paste hotkey; it also takes a press only while the
+    // clipboard still holds WellSnap's copy.
+    crate::ctrl_v::sync(app, has_content && settings.ctrl_v_paste);
     status.capture_error_kind = status.capture_error.as_deref().map(crate::conflicts::classify);
     status.smart_paste_error_kind = status.smart_paste_error.as_deref().map(crate::conflicts::classify);
     publish(app, status);

@@ -4,6 +4,7 @@ mod capture;
 mod clipboard;
 mod commands;
 mod conflicts;
+mod ctrl_v;
 mod donations;
 mod export;
 mod hotkeys;

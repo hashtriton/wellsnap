@@ -60,6 +60,10 @@ export const settings: typeof ru = {
     useAlternative: "Use {hotkey}",
     howToFix: "How to fix",
     smartPasteWhere: "Where paste with text is tested",
+    ctrlV: "{keys} pastes with text",
+    ctrlVDesc:
+      "While the clipboard holds a screenshot copied with separate text, or a set after Copy all, {keys} pastes it like Paste with text. Copy anything else and {keys} works as usual again. In terminals and in WellSnap's own windows {keys} always works as usual.",
+    ctrlVMac: "Needs the Accessibility permission, the same as paste with text. Without it {keys} works as usual.",
     macSystem:
       "{shot3}, {shot4} and {shot5} belong to macOS and open the system screenshot tools. WellSnap uses {ours} by default.",
   },

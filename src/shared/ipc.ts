@@ -55,6 +55,8 @@ export interface Settings {
   theme: Theme;
   captureHotkey: string;
   smartPasteHotkey: string;
+  /** Ctrl+V (Cmd+V) does paste with text while WellSnap's own copy is on the clipboard. */
+  ctrlVPaste: boolean;
   autostart: boolean;
   saveDir: string | null;
   imageFormat: ImageFormat;
@@ -152,6 +154,8 @@ export interface SetInfo {
   text: string;
   smartPasteHotkey: string;
   smartPasteRegistered: boolean;
+  /** Ctrl+V (Cmd+V) is watched: after "Copy all" it pastes with the text. */
+  ctrlVPaste: boolean;
   copyMode: SetCopyMode;
 }
 

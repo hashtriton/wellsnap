@@ -44,6 +44,10 @@ Settings > Privacy > "Send anonymous usage statistics". Turning it off deletes t
 - Any time later: Settings > Privacy. "Show what was sent" lists what left your computer; "Reset install number" starts a new random number.
 - Builds compiled from source without the telemetry keys send nothing.
 
+## The Ctrl+V key
+
+While WellSnap's own copy with comment text is on the clipboard, WellSnap watches one key combination, Ctrl+V (Cmd+V on macOS), to paste the screenshots together with the text. It does not look at other keys, and it records and sends no key presses. Turn it off under Settings > Shortcuts.
+
 ## Other network requests
 
 - **Updates.** WellSnap asks GitHub for the latest version shortly after start and every 12 hours, and downloads new versions from GitHub. Nothing else is sent with this check. Turn it off under Settings > About.

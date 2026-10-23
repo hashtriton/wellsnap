@@ -4,7 +4,7 @@ import { api } from "../shared/ipc";
 import type { TFunction } from "../shared/i18n";
 import { CaptureFix, ConflictCard, useConflicts } from "../shared/ui/ConflictCard";
 import { alternativeKey, captureAdvice, fixSteps, isTaken, suspectsOf, takenText } from "../shared/ui/conflicts";
-import { Button, Notice, Row } from "../shared/ui/controls";
+import { Button, Notice, Row, Switch } from "../shared/ui/controls";
 import { defaultHotkeys, formatAccelerator, sameAccelerator } from "../shared/ui/hotkey";
 import { Icon } from "../shared/ui/icons";
 import { PrintScreenCard } from "../shared/ui/PrintScreenCard";
@@ -23,6 +23,7 @@ interface Fix {
 export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo }: PageProps) {
   const defaults = defaultHotkeys(platform);
   const status = info?.hotkeys;
+  const pasteKeys = formatAccelerator(platform === "macos" ? "Cmd+V" : "Ctrl+V", platform);
   const [openFailed, setOpenFailed] = useState(false);
   const conflicts = useConflicts(platform, settings.captureHotkey);
   const advice = captureAdvice({
@@ -87,6 +88,22 @@ export function Hotkeys({ t, lang, platform, settings, info, update, refreshInfo
           t={t}
           save={(smartPasteHotkey) => update({ smartPasteHotkey })}
         />
+        <Row
+          label={t("settings.hotkeys.ctrlV", { keys: pasteKeys })}
+          description={
+            t("settings.hotkeys.ctrlVDesc", { keys: pasteKeys }) +
+            (platform === "macos" ? ` ${t("settings.hotkeys.ctrlVMac", { keys: pasteKeys })}` : "")
+          }
+        >
+          {({ labelId, descId }) => (
+            <Switch
+              labelledBy={labelId}
+              describedBy={descId}
+              checked={settings.ctrlVPaste}
+              onChange={(ctrlVPaste) => update({ ctrlVPaste })}
+            />
+          )}
+        </Row>
       </section>
       {openFailed && <Notice tone="warning">{t("settings.support.openFailed")}</Notice>}
 

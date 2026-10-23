@@ -100,7 +100,9 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
   "CFCGTypes",
   "CFData",
   "CFDictionary",
+  "CFMachPort",
   "CFNumber",
+  "CFRunLoop",
   "CFString",
 ] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = [

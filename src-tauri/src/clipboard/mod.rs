@@ -70,3 +70,14 @@ pub fn copy_files(files: Vec<PathBuf>, text: Option<String>, html: Option<String
 pub fn copy_text(text: String, transient: bool) -> Result<(), ClipboardError> {
     write(&ClipPayload { text: Some(text), transient, ..Default::default() })
 }
+
+/// A number that changes whenever any program writes the clipboard (GetClipboardSequenceNumber, NSPasteboard
+/// changeCount). None when it cannot be read.
+pub fn change_count() -> Option<u64> {
+    #[cfg(windows)]
+    return windows::change_count();
+    #[cfg(target_os = "macos")]
+    return macos::change_count();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return None;
+}

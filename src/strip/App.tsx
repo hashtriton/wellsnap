@@ -123,7 +123,13 @@ export function App() {
         <button
           type="button"
           className="strip-primary"
-          title={picture ? t("strip.copyAllPictureHint") : t("strip.copyAllHint")}
+          title={
+            picture
+              ? t("strip.copyAllPictureHint")
+              : set?.ctrlVPaste && comments > 0
+                ? t("strip.copyAllHintCtrlV", { keys: formatAccelerator(platform === "macos" ? "Cmd+V" : "Ctrl+V", platform) })
+                : t("strip.copyAllHint")
+          }
           disabled={busy !== null || snapshots.length === 0}
           aria-busy={busy === "copy" || undefined}
           onClick={() => run("copy", api.setCopyAll)}

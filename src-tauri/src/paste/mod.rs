@@ -38,6 +38,8 @@ pub struct Foreground {
     /// The window belongs to a process with a higher integrity level (runs as administrator while WellSnap does
     /// not). Windows drops synthetic input to it silently. Always false outside Windows.
     pub elevated: bool,
+    /// The window belongs to WellSnap itself (a comment field of the editor, Settings).
+    pub ours: bool,
 }
 
 pub fn foreground() -> Foreground {

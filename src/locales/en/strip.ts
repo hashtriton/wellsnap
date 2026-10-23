@@ -9,6 +9,7 @@ export const strip: typeof ru = {
   copyAll: "Copy all",
   copyAllHint:
     "Copy every screenshot as files: one paste sends them as one album. Comments drawn on the images go with them; to send separate comment text too, use paste with text",
+  copyAllHintCtrlV: "Copy every screenshot as files. {keys} pastes them into a chat as one album with the comment text",
   newSnapshot: "New screenshot",
   newSnapshotHint: "Take the next screenshot for this set",
   saveAll: "Save all",

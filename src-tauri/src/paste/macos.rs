@@ -9,7 +9,7 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSWorkspace;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType};
 use objc2_core_graphics::{
-    CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGKeyCode,
+    CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGKeyCode,
     CGPreflightPostEventAccess, CGRequestPostEventAccess, CGWindowListCopyWindowInfo, CGWindowListOption,
     kCGNullWindowID, kCGWindowLayer, kCGWindowName, kCGWindowOwnerPID,
 };
@@ -65,8 +65,11 @@ pub fn send_paste(PasteKey(key): PasteKey) -> Result<(), String> {
         return Err("CGEventCreateKeyboardEvent failed".into());
     };
     let flags = CGEventFlags(CGEventFlags::MaskCommand.0 | DEVICE_LEFT_COMMAND);
-    CGEvent::set_flags(Some(&down), flags);
-    CGEvent::set_flags(Some(&up), flags);
+    for event in [&down, &up] {
+        CGEvent::set_flags(Some(event), flags);
+        // The Cmd+V tap (ctrl_v/macos.rs) lets its own paste through.
+        CGEvent::set_integer_value_field(Some(event), CGEventField::EventSourceUserData, crate::ctrl_v::MARK);
+    }
     CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&down));
     CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&up));
     Ok(())
@@ -189,19 +192,18 @@ pub fn foreground_id() -> Option<String> {
 
 /// The id is the bundle id, read with the program in the same call; input is never refused for elevation here.
 pub fn foreground() -> Foreground {
-    let info = foreground_info();
-    let id = info.as_ref().map(|info| info.app.clone());
-    Foreground { info, id, elevated: false }
-}
-
-/// The bundle id of the frontmost application and, for a browser, the name of its front window.
-fn foreground_info() -> Option<ForegroundInfo> {
-    let (app, pid) = autoreleasepool(|_| {
+    let front = autoreleasepool(|_| {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
         Some((app.bundleIdentifier()?.to_string(), app.processIdentifier()))
-    })?;
+    });
+    let Some((app, pid)) = front else { return Foreground::default() };
     let title = if is_browser(&app, "") { window_title(pid) } else { None };
-    Some(ForegroundInfo { app, path: String::new(), title })
+    Foreground {
+        id: Some(app.clone()),
+        info: Some(ForegroundInfo { app, path: String::new(), title }),
+        elevated: false,
+        ours: u32::try_from(pid).is_ok_and(|pid| pid == std::process::id()),
+    }
 }
 
 /// macOS fills in kCGWindowName only for apps that hold Screen Recording, which capture needs anyway; reading

@@ -24,7 +24,8 @@ use windows::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, GetLastError, GlobalFree, HANDLE, HGLOBAL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW,
+    SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalUnlock};
@@ -58,6 +59,12 @@ pub fn write(payload: &ClipPayload) -> Result<(), ClipboardError> {
         std::mem::forget(data);
     }
     Ok(())
+}
+
+/// 0 means the window station gives no access; then the number cannot tell writes apart.
+pub fn change_count() -> Option<u64> {
+    let count = unsafe { GetClipboardSequenceNumber() };
+    (count != 0).then_some(u64::from(count))
 }
 
 /// Clipboard formats in the order they are placed: the most descriptive first, as Microsoft recommends.

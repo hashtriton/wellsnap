@@ -14,7 +14,10 @@ const QUALITY_MAX = 100;
 export function Screenshots({ t, platform, settings, info, update, refreshInfo }: PageProps) {
   const [picking, setPicking] = useState(false);
   const folder = settings.saveDir ?? info?.saveDir ?? "";
-  const pasteHotkey = formatAccelerator(settings.smartPasteHotkey, platform);
+  // With Ctrl+V pasting the text too, that is the key to name.
+  const pasteHotkey = settings.ctrlVPaste
+    ? formatAccelerator(platform === "macos" ? "Cmd+V" : "Ctrl+V", platform)
+    : formatAccelerator(settings.smartPasteHotkey, platform);
   const placementDesc =
     settings.commentPlacement === "onImage"
       ? t("settings.screenshots.placementOnImageDesc")

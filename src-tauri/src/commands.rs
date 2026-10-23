@@ -107,7 +107,10 @@ fn keep_core_owned(mut merged: Settings, current: &mut Settings) -> Settings {
 }
 
 fn apply_side_effects(app: &AppHandle, before: &Settings, after: &Settings) {
-    if before.capture_hotkey != after.capture_hotkey || before.smart_paste_hotkey != after.smart_paste_hotkey {
+    if before.capture_hotkey != after.capture_hotkey
+        || before.smart_paste_hotkey != after.smart_paste_hotkey
+        || before.ctrl_v_paste != after.ctrl_v_paste
+    {
         crate::hotkeys::apply(app);
     }
     if before.theme != after.theme {
@@ -193,6 +196,8 @@ pub struct SetInfo {
     text: String,
     smart_paste_hotkey: String,
     smart_paste_registered: bool,
+    /// Ctrl+V (Cmd+V) pastes with text after "Copy all".
+    ctrl_v_paste: bool,
     copy_mode: SetCopyMode,
 }
 
@@ -202,6 +207,7 @@ pub fn get_set(app: AppHandle) -> SetInfo {
     let lang = state.lang();
     let settings = state.settings();
     let registered = state.hotkeys.lock().unwrap().smart_paste_registered;
+    let ctrl_v_paste = crate::ctrl_v::watching();
     let guard = state.session.lock().unwrap();
     match guard.as_ref() {
         Some(s) => SetInfo {
@@ -211,6 +217,7 @@ pub fn get_set(app: AppHandle) -> SetInfo {
             text: s.text_block(lang),
             smart_paste_hotkey: settings.smart_paste_hotkey,
             smart_paste_registered: registered,
+            ctrl_v_paste,
             copy_mode: settings.set_copy_mode,
         },
         None => SetInfo {
@@ -220,6 +227,7 @@ pub fn get_set(app: AppHandle) -> SetInfo {
             text: String::new(),
             smart_paste_hotkey: settings.smart_paste_hotkey,
             smart_paste_registered: registered,
+            ctrl_v_paste,
             copy_mode: settings.set_copy_mode,
         },
     }
@@ -548,9 +556,11 @@ mod tests {
             text: String::new(),
             smart_paste_hotkey: String::new(),
             smart_paste_registered: false,
+            ctrl_v_paste: true,
             copy_mode: SetCopyMode::OnePicture,
         };
-        assert_eq!(serde_json::to_value(set).unwrap()["copyMode"], "onePicture");
+        let set = serde_json::to_value(set).unwrap();
+        assert_eq!((&set["copyMode"], &set["ctrlVPaste"]), (&"onePicture".into(), &true.into()));
         let info = AppInfo {
             version: String::new(),
             platform: "windows",

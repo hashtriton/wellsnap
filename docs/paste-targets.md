@@ -18,7 +18,7 @@ How it pastes depends on the program in front. This page lists the programs Well
 
 Web pages are checked in Chromium browsers (Chrome, Edge, Yandex Browser). Firefox and its forks paste only the first file of a list, so there a page from the tables that takes several files gets all screenshots joined into one picture; that has not been checked by hand yet. Other pages in Firefox follow the row `gecko_engine`.
 
-The column "Plain Ctrl+V after Copy all" says what one ordinary paste gives. "Expected" means it comes from the program's source code or documentation and was not checked by hand.
+The column "Plain Ctrl+V after Copy all" says what one ordinary paste gives. With "Ctrl+V pastes with text" on (Settings > Shortcuts, on by default), Ctrl+V (Cmd+V on macOS) right after copying a screenshot with separate text or a set with comments does paste with text instead, everywhere but in terminals; the column then describes a paste from another program, or the setting turned off. "Expected" means it comes from the program's source code or documentation and was not checked by hand.
 
 ## Privacy
 

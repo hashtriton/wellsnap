@@ -89,6 +89,11 @@ pub fn write(payload: &ClipPayload) -> Result<(), ClipboardError> {
     })
 }
 
+pub fn change_count() -> Option<u64> {
+    let count = autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount());
+    u64::try_from(count).ok()
+}
+
 fn build_item(item: &Item<'_>) -> Result<Retained<NSPasteboardItem>, ClipboardError> {
     let out = NSPasteboardItem::new();
     for (uti, value) in item {

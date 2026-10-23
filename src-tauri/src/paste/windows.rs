@@ -103,6 +103,7 @@ pub fn foreground() -> Foreground {
         info: pid.and_then(|pid| window_info(hwnd, pid)),
         id: Some(window_id(hwnd)),
         elevated: pid.is_some_and(is_elevated),
+        ours: pid == Some(std::process::id()),
     }
 }
 

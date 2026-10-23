@@ -180,14 +180,17 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
             let with_text = copy.is_some();
             set_last_copy(app, copy);
             let smart_paste = with_text.then(|| {
-                let hotkey = crate::tray::display_hotkey(&state.settings().smart_paste_hotkey);
-                // Promise the hotkey only when it is really registered (it may be taken by another app).
-                let key = if crate::hotkeys::settled_status(app).smart_paste_registered {
-                    "toast.smartPasteHint"
+                crate::ctrl_v::arm(app);
+                // Promise a key only when it really works: the hotkey may be taken by another app, and the
+                // macOS Cmd+V tap needs Accessibility.
+                let status = crate::hotkeys::settled_status(app);
+                if crate::ctrl_v::watching() {
+                    tr(lang, "toast.smartPasteHint").replace("{hotkey}", PASTE_KEYS)
                 } else {
-                    "toast.smartPasteOff"
-                };
-                tr(lang, key).replace("{hotkey}", &hotkey)
+                    let hotkey = crate::tray::display_hotkey(&state.settings().smart_paste_hotkey);
+                    let key = if status.smart_paste_registered { "toast.smartPasteHint" } else { "toast.smartPasteOff" };
+                    tr(lang, key).replace("{hotkey}", &hotkey)
+                }
             });
             match copied_detail(lang, smart_paste, meta.hint) {
                 Some(detail) => crate::notice::toast_with_detail(app, tr(lang, "toast.copied"), &detail),
@@ -207,7 +210,10 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
             set_last_copy(app, None);
             after_set_changed(app);
             match copied {
-                Ok(()) => crate::notice::toast(app, tr(lang, "toast.copiedAll")),
+                Ok(()) => {
+                    crate::ctrl_v::arm(app);
+                    crate::notice::toast(app, tr(lang, "toast.copiedAll"));
+                }
                 // The snapshot is in the set already: retrying from the overlay would add it twice.
                 Err(err) => {
                     nudge = false;
@@ -394,6 +400,7 @@ fn copy_all_blocking(app: &AppHandle) -> Result<(), String> {
     } else {
         copy_set_to_clipboard(app)?;
         set_last_copy(app, None);
+        crate::ctrl_v::arm(app);
         crate::notice::toast(app, tr(lang, "toast.copiedAll"));
     }
     crate::telemetry::count("set_copy_all");
@@ -902,6 +909,8 @@ fn smart_paste_blocking(app: &AppHandle) -> Result<&'static str, PasteError> {
     if ran.stopped.is_some() || ran.cancelled {
         return Ok("paste_fail_window_changed");
     }
+    // The clipboard now holds the last step; another Ctrl+V pastes the same message again.
+    crate::ctrl_v::arm(app);
     if ran.text_left && profile.class != Class::Manual {
         crate::telemetry::count("paste_text_split");
     }
@@ -1004,6 +1013,16 @@ pub fn nudge_in_flight() -> bool {
 
 pub fn smart_paste_busy() -> bool {
     SMART_PASTE_BUSY.load(Ordering::Acquire)
+}
+
+/// Smart paste would press keys in this program: everywhere but a terminal, which only gets the text on the
+/// clipboard. Ctrl+V leaves a terminal its plain paste (ctrl_v.rs).
+pub fn types_into(info: Option<&target::ForegroundInfo>) -> bool {
+    let detected = match info {
+        Some(info) => target::detect(info),
+        None => target::detect(&target::ForegroundInfo::default()),
+    };
+    target::effective(&detected, ALLOW_PLANNED).1.class != Class::Manual
 }
 
 /// Held by the updater while it replaces the app, so a smart paste cannot start halfway.

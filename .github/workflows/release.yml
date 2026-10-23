@@ -44,9 +44,8 @@ jobs:
 
       # release-notes/vX.Y.Z.md becomes the release text and the latest.json notes the app shows after the update
       # (its "### Русский" and "### English" sections). Commit it before tagging; editing the draft later does
-      # not change latest.json. The release page is the download page, so it also carries the code signing
-      # policy line the SignPath Foundation terms ask for; its "##" heading ends the English section, so the app
-      # does not show it.
+      # not change latest.json. The release page is the download page, so it also says how to open the unsigned
+      # installers; its "##" heading ends the English section, so the app does not show it.
       - name: Read release notes
         id: notes
         shell: bash
@@ -56,14 +55,14 @@ jobs:
             echo "::error::$file is missing or empty; copy release-notes/TEMPLATE.md and commit it before tagging"
             exit 1
           fi
-          policy="https://github.com/${GITHUB_REPOSITORY}#code-signing-policy"
+          signing="https://github.com/${GITHUB_REPOSITORY}#code-signing"
           {
             echo "body<<WELLSNAP_NOTES_EOF"
             cat "$file"
             echo
-            echo "## Code signing policy"
+            echo "## Installing"
             echo
-            echo "Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). [Code signing policy]($policy), [privacy policy](https://github.com/${GITHUB_REPOSITORY}/blob/main/PRIVACY.md)."
+            echo "The installers are not [code signed]($signing) yet. Windows: SmartScreen shows \"Windows protected your PC\" on the first run; click \"More info\", then \"Run anyway\". macOS: open System Settings > Privacy & Security and click \"Open Anyway\". [Privacy policy](https://github.com/${GITHUB_REPOSITORY}/blob/main/PRIVACY.md)."
             echo "WELLSNAP_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 

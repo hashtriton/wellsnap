@@ -24,20 +24,12 @@ Installers for Windows (10 and 11) and macOS (14 or later) are on the [Releases]
 
 WellSnap has no accounts and uploads no screenshots. It can send crash reports (Sentry) and anonymous daily usage statistics (PostHog); both can be turned off in the installer and under Settings > Privacy, and nothing is sent before the first setup is finished. Details: [privacy policy](PRIVACY.md) ([по-русски](PRIVACY.ru.md)).
 
-## Code signing policy
+## Code signing
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+The installers are not code signed yet. Releases are built from this repository by GitHub Actions ([release workflow](.github/workflows/release.yml)).
 
-Windows releases are built from this repository by GitHub Actions ([release workflow](.github/workflows/release.yml)) and signed only after an approver confirms each release.
-
-Team roles:
-
-- Committers and reviewers: [hashtriton](https://github.com/hashtriton)
-- Approvers: [hashtriton](https://github.com/hashtriton)
-
-Contributions from other people come as pull requests and are reviewed before merging. All team members use multi-factor authentication for GitHub and SignPath.
-
-Privacy: see the [privacy policy](PRIVACY.md). This program sends crash reports and usage statistics only as described there, and does not transfer any other information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- Windows: SmartScreen shows "Windows protected your PC" on the first run. Click "More info", then "Run anyway".
+- macOS: the app is not notarized yet, so macOS blocks the first launch. Open System Settings > Privacy & Security and click "Open Anyway".
 
 ## Build from source
 

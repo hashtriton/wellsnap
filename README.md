@@ -26,10 +26,10 @@ WellSnap has no accounts and uploads no screenshots. It can send crash reports (
 
 ## Code signing
 
-The installers are not code signed yet. Releases are built from this repository by GitHub Actions ([release workflow](.github/workflows/release.yml)).
+Releases are built from this repository by GitHub Actions ([release workflow](.github/workflows/release.yml)).
 
-- Windows: SmartScreen shows "Windows protected your PC" on the first run. Click "More info", then "Run anyway".
-- macOS: the app is not notarized yet, so macOS blocks the first launch. Open System Settings > Privacy & Security and click "Open Anyway".
+- macOS: the app is signed with a Developer ID certificate and notarized by Apple.
+- Windows: the installer is not code signed yet, so SmartScreen shows "Windows protected your PC" on the first run. Click "More info", then "Run anyway".
 
 ## Build from source
 

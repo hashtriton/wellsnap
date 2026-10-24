@@ -17,8 +17,8 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_opener::OpenerExt;
 
-/// Hosts the app may open in the browser (support page, donation links, project page).
-const EXTERNAL_HOSTS: &[&str] = &["github.com", "pay.cloudtips.ru", "cloudtips.ru", "wellsnap.app", "tonviewer.com"];
+/// Hosts the app may open in the browser (the site's donation page, the project on GitHub).
+const EXTERNAL_HOSTS: &[&str] = &["github.com", "wellsnap.net"];
 
 #[tauri::command]
 pub fn overlay_page_loaded(app: AppHandle, window: WebviewWindow) {
@@ -505,7 +505,7 @@ mod tests {
         for ok in [
             "https://github.com/hashtriton/wellsnap",
             "https://sub.github.com/x",
-            "https://pay.cloudtips.ru/p/123?a=1#b",
+            "https://wellsnap.net/ru/donate/?from=app#b",
             "https://github.com:443/x",
         ] {
             assert!(allowed_external(ok).is_some(), "{ok}");
@@ -521,6 +521,8 @@ mod tests {
             "http://github.com/",
             "https://evilgithub.com/",
             "https://github.com.evil.com/",
+            "https://wellsnap.net.evil.com/",
+            "https://pay.cloudtips.ru/p/123",
             "javascript:alert(1)",
             "not a url",
         ] {

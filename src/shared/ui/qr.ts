@@ -1,4 +1,4 @@
-// Offline QR codes for donation links and wallet addresses, drawn as one SVG path.
+// Offline QR codes for links, drawn as one SVG path.
 import qrcode from "qrcode-generator";
 
 export interface QrShape {
@@ -9,7 +9,7 @@ export interface QrShape {
 }
 
 /**
- * ASCII only: links and TON addresses never need more, and Byte mode then matches every scanner. The quiet
+ * ASCII only: links never need more, and Byte mode then matches every scanner. The quiet
  * zone is the 4 modules the spec asks for, so dark card surroundings do not confuse phone scanners.
  */
 export function qrShape(text: string, quietZone = 4): QrShape {

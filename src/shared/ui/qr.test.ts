@@ -13,7 +13,7 @@ function grid(shape: { size: number; path: string }): boolean[][] {
 
 describe("qrShape", () => {
   it("draws finder patterns inside the quiet zone", () => {
-    const shape = qrShape("https://pay.cloudtips.ru/p/12345678");
+    const shape = qrShape("https://wellsnap.net/ru/donate/?from=app");
     const cells = grid(shape);
     const q = 4;
     const inner = shape.size - q * 2;

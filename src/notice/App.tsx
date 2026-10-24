@@ -5,7 +5,7 @@ import { AppMark } from "../assets/AppMark";
 import { useI18n, type TFunction } from "../shared/i18n";
 import { api, events, type CrashAnswer, type Lang, type NoticePayload, type PromptOutcome } from "../shared/ipc";
 import { useThemeSync } from "../shared/theme";
-import { hasPaymentMethods, RELEASES_URL, supportTarget } from "../shared/donate";
+import { donatePageUrl, RELEASES_URL } from "../shared/donate";
 import { Button } from "../shared/ui/controls";
 import { Icon } from "../shared/ui/icons";
 import { crashCopy, nudgeCopy, toastDetail } from "./copy";
@@ -49,13 +49,6 @@ export function App() {
     let heard = false;
     const show = (payload: NoticePayload) => {
       settleCard();
-      if (payload.kind === "nudge" && !hasPaymentMethods()) {
-        // This build has no way to donate, so the card would lead nowhere: retry later, spend nothing.
-        api.donationOutcome("notSeen").catch(() => undefined);
-        api.noticeClose().catch(() => undefined);
-        setShown(null);
-        return;
-      }
       if (payload.kind === "nudge") card.current = { shownAt: performance.now(), reported: false };
       seq += 1;
       setShown({ id: seq, payload });
@@ -296,9 +289,10 @@ function NudgeCard({
 
   const support = () => {
     onOutcome("support");
-    const target = supportTarget(lang);
-    const opened = target.kind === "url" ? api.openExternal(target.url) : Promise.reject(new Error("no link"));
-    opened.catch(() => api.openSettings("support")).catch(() => undefined);
+    api
+      .openExternal(donatePageUrl(lang))
+      .catch(() => api.openSettings("support"))
+      .catch(() => undefined);
   };
 
   return (

@@ -376,53 +376,8 @@ body {
   gap: 16px;
   justify-content: space-between;
 }
-.method-crypto {
-  flex-direction: column;
-  gap: 0;
-}
 .method-main {
   min-width: 0;
-}
-.address {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 12px;
-  margin-top: 4px;
-  border-top: 1px solid var(--border);
-}
-.address-main {
-  min-width: 0;
-}
-.address-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-.address-value {
-  display: block;
-  margin: 6px 0;
-  padding: 7px 9px;
-  border-radius: var(--radius-s);
-  background: var(--surface-2);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.4;
-  word-break: break-all;
-  user-select: all;
-  -webkit-user-select: all;
-}
-.address-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 0 0 10px;
-  font-size: 12.5px;
-  color: var(--text);
-}
-.address-warning > svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--warning);
 }
 .qr-box {
   display: flex;

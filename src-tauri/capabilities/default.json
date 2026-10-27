@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for all WellSnap windows (overlays, snapshot strip, notices, settings, onboarding)",
-  "windows": ["overlay-*", "strip", "notice", "settings", "onboarding"],
+  "description": "Permissions for all WellSnap windows (overlays, snapshot strip, pinned screenshots, notices, settings, onboarding)",
+  "windows": ["overlay-*", "strip", "pin-*", "notice", "settings", "onboarding"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging"

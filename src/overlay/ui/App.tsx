@@ -67,7 +67,7 @@ function inputKeys(editor: Editor, mac: boolean) {
     if (action === "submit") editor.submitInput();
     else if (action === "close") editor.closeInput();
     // finish() commits the open input first.
-    else if (action === "copy" || action === "save") void editor.finish(action);
+    else if (action === "copy" || action === "save" || action === "pin") void editor.finish(action);
   };
 }
 
@@ -164,7 +164,7 @@ const HELP_GROUPS: { key: string; ids: CommandId[] }[] = [
     key: "tools",
     ids: ["tool.select", "tool.arrow", "tool.pencil", "tool.rect", "tool.marker", "tool.blur", "tool.mark", "tool.text"],
   },
-  { key: "actions", ids: ["primary", "copy", "save", "addToSet", "commentPlacement", "captions", "escape"] },
+  { key: "actions", ids: ["primary", "copy", "save", "pin", "addToSet", "commentPlacement", "captions", "escape"] },
   {
     key: "editing",
     ids: ["undo", "redo", "delete", "selectAll", "move", "moveFast", "resize", "resizeFast", "widthDown", "widthUp", "loupe", "pickColor", "help"],

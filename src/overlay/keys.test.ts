@@ -53,6 +53,15 @@ describe("matchKey", () => {
     expect(matchKey(key("KeyC"), false)).toBe("pickColor");
   });
 
+  it("pins with Ctrl+P (Cmd+P) or Snipaste's F3, plain P stays the pencil", () => {
+    expect(matchKey(key("KeyP", { ctrlKey: true }, "з"), false)).toBe("pin");
+    expect(matchKey(key("KeyP", { metaKey: true }), true)).toBe("pin");
+    expect(matchKey(key("F3", {}, "F3"), false)).toBe("pin");
+    expect(matchKey(key("KeyP"), false)).toBe("tool.pencil");
+    expect(isRepeatable("pin")).toBe(false);
+    expect(shortcutOf("pin", false)).toBe("Ctrl+P");
+  });
+
   it("maps arrows with modifiers", () => {
     expect(matchKey(key("ArrowLeft"), false)).toBe("move");
     expect(matchKey(key("ArrowUp", { shiftKey: true }), false)).toBe("moveFast");
@@ -206,6 +215,13 @@ describe("inputKeyAction", () => {
   it("saves on Ctrl+S, also with text selected", () => {
     expect(inputKeyAction(input("s", "KeyS", { ctrlKey: true }), false, true)).toBe("save");
     expect(inputKeyAction(input("s", "KeyS", { metaKey: true }), true, false)).toBe("save");
+  });
+
+  it("pins on Ctrl+P, also with text selected, and swallows a held press", () => {
+    expect(inputKeyAction(input("p", "KeyP", { ctrlKey: true }), false, true)).toBe("pin");
+    expect(inputKeyAction(input("F3", "F3"), false, false)).toBe("pin");
+    expect(inputKeyAction(input("p", "KeyP", { ctrlKey: true, repeat: true }), false, false)).toBe("block");
+    expect(inputKeyAction(input("p", "KeyP"), false, false)).toBeNull();
   });
 
   it("leaves typing and the other editing keys to the input", () => {

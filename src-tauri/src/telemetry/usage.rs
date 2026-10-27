@@ -227,6 +227,7 @@ pub fn finished(meta: &FinishMeta, marks: &[Mark]) {
             FinishAction::Save => "finish_save",
             FinishAction::AddToSet => "finish_add_to_set",
             FinishAction::CopyAll => "finish_copy_all",
+            FinishAction::Pin => "finish_pin",
         },
         1,
     );

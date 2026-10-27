@@ -10,7 +10,7 @@ import { Segmented, Spinner } from "../shared/ui/controls";
 import { startComposer } from "./composer";
 import { commentCount, totalComments } from "./counts";
 
-type Busy = "copy" | "save" | "new" | "clear" | null;
+type Busy = "copy" | "save" | "new" | "clear" | "pin" | null;
 
 export function App() {
   useThemeSync();
@@ -99,7 +99,14 @@ export function App() {
       <ul className="strip-list">
         {set?.sessionId &&
           snapshots.map((snap) => (
-            <SnapshotItem key={snap.letter} snap={snap} sessionId={set.sessionId!} t={t} onRemove={() => api.setRemove(snap.letter)} />
+            <SnapshotItem
+              key={snap.letter}
+              snap={snap}
+              sessionId={set.sessionId!}
+              t={t}
+              onPin={() => void run("pin", () => api.pinSnapshot(snap.letter))}
+              onRemove={() => api.setRemove(snap.letter)}
+            />
           ))}
       </ul>
 
@@ -207,12 +214,36 @@ export function App() {
   );
 }
 
-function SnapshotItem({ snap, sessionId, t, onRemove }: { snap: Snapshot; sessionId: string; t: TFunction; onRemove: () => void }) {
+function SnapshotItem({
+  snap,
+  sessionId,
+  t,
+  onPin,
+  onRemove,
+}: {
+  snap: Snapshot;
+  sessionId: string;
+  t: TFunction;
+  onPin: () => void;
+  onRemove: () => void;
+}) {
   const count = commentCount(snap);
   const label = t("strip.snapshot", { letter: snap.letter });
   return (
     <li className="strip-item">
-      <figure className="strip-thumb" title={count > 0 ? `${label}, ${t("common.comments", { count })}` : label}>
+      <figure
+        className="strip-thumb"
+        role="button"
+        tabIndex={0}
+        title={`${count > 0 ? `${label}, ${t("common.comments", { count })}` : label}. ${t("strip.pinHint")}`}
+        onClick={onPin}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onPin();
+          }
+        }}
+      >
         <img src={snapshotUrl(sessionId, snap.letter, snap.revision)} alt={label} draggable={false} decoding="async" />
         <span className="strip-letter" aria-hidden="true">
           {snap.letter}

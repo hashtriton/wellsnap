@@ -308,6 +308,7 @@ fn gate_input(app: &AppHandle, mode: GateMode, ctx: GateCtx, version: &str) -> G
         last_copy: state.last_copy.lock().unwrap().is_some(),
         set_unchanged_for,
         ui_window_open: app.get_webview_window("settings").is_some() || app.get_webview_window("onboarding").is_some(),
+        pins_open: crate::pins::open_count(app) > 0,
         hotkeys_suspended: state.hotkeys_suspended.load(Ordering::SeqCst),
         idle: system::idle(),
         idle_on_previous_tick: ctx.idle_before,

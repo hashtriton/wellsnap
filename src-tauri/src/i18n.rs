@@ -48,6 +48,7 @@ pub fn tr(lang: Lang, key: &str) -> &'static str {
     match key {
         "tray.capture" => if ru { "Сделать скриншот" } else { "Take screenshot" },
         "tray.strip" => if ru { "Показать ленту снимков" } else { "Show snapshot strip" },
+        "tray.closePins" => if ru { "Закрыть закреплённые снимки ({count})" } else { "Close pinned screenshots ({count})" },
         "tray.settings" => if ru { "Настройки..." } else { "Settings..." },
         "tray.support" => if ru { "Поддержать проект" } else { "Support the project" },
         "tray.supported" => if ru { "Спасибо за поддержку" } else { "Thanks for your support" },
@@ -89,6 +90,12 @@ pub fn tr(lang: Lang, key: &str) -> &'static str {
             "The window changed: the pictures are in the clipboard, paste them yourself"
         },
         "toast.copyFailed" => if ru { "Не удалось скопировать" } else { "Could not copy" },
+        "toast.pinFailed" => if ru { "Не удалось закрепить снимок" } else { "Could not pin the screenshot" },
+        "toast.pinsFull" => if ru {
+            "Закреплено уже {max} снимков. Закройте ненужные и попробуйте снова"
+        } else {
+            "{max} screenshots are pinned already. Close some and try again"
+        },
         "toast.sessionFull" => if ru { "В наборе уже 26 снимков" } else { "The set already has 26 screenshots" },
         "toast.screenPermissionOff" => if ru { "Нет доступа к записи экрана" } else { "Screen Recording is off" },
         "toast.screenPermissionHint" => if ru {

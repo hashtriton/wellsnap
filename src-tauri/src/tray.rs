@@ -22,6 +22,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "capture" => crate::overlay::begin_capture(app),
             "fix" => crate::windows_ui::open_settings(app, Some("hotkeys")),
             "strip" => crate::windows_ui::sync_strip(app),
+            "pins" => crate::pins::close_all(app),
             "settings" => crate::windows_ui::open_settings(app, None),
             "support" => crate::windows_ui::open_settings(app, Some("support")),
             "about" => crate::windows_ui::open_settings(app, Some("about")),
@@ -41,8 +42,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Rebuilds the menu after a language change, a donation status change, a set change or when the capture
-/// hotkey starts or stops working.
+/// Rebuilds the menu after a language change, a donation status change, a set change, a pin opened or closed,
+/// or when the capture hotkey starts or stops working.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     match make_menu(app) {
@@ -74,6 +75,13 @@ fn make_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None
     };
     let strip = MenuItem::with_id(app, "strip", tr(lang, "tray.strip"), has_set, None::<&str>)?;
+    let pin_count = crate::pins::open_count(app);
+    let pins = if pin_count > 0 {
+        let label = tr(lang, "tray.closePins").replace("{count}", &pin_count.to_string());
+        Some(MenuItem::with_id(app, "pins", label, true, None::<&str>)?)
+    } else {
+        None
+    };
     let settings_item = MenuItem::with_id(app, "settings", tr(lang, "tray.settings"), true, None::<&str>)?;
     let support = MenuItem::with_id(app, "support", support_label, true, None::<&str>)?;
     let about = MenuItem::with_id(app, "about", tr(lang, "tray.about"), true, None::<&str>)?;
@@ -94,7 +102,11 @@ fn make_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     if let Some(fix) = &fix {
         items.push(fix);
     }
-    items.extend([&strip as &dyn IsMenuItem<Wry>, &sep1, &settings_item, &support, &about]);
+    items.push(&strip);
+    if let Some(pins) = &pins {
+        items.push(pins);
+    }
+    items.extend([&sep1 as &dyn IsMenuItem<Wry>, &settings_item, &support, &about]);
     if let Some(update) = &update {
         items.push(update);
     }

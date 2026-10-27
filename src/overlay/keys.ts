@@ -15,6 +15,7 @@ export type CommandId =
   | "addToSet"
   | "copy"
   | "save"
+  | "pin"
   | "undo"
   | "redo"
   | "selectAll"
@@ -61,6 +62,8 @@ export const KEYMAP: readonly Binding[] = [
   { id: "addToSet", chords: [{ code: "Enter", shift: true }, { code: "NumpadEnter", shift: true }] },
   { id: "copy", chords: [{ code: "KeyC", mod: true }] },
   { id: "save", chords: [{ code: "KeyS", mod: true }] },
+  // F3 is Snipaste's pin key.
+  { id: "pin", chords: [{ code: "KeyP", mod: true }, { code: "F3" }] },
   { id: "undo", chords: [{ code: "KeyZ", mod: true }] },
   { id: "redo", chords: [{ code: "KeyZ", mod: true, shift: true }, { code: "KeyY", mod: true }] },
   { id: "selectAll", chords: [{ code: "KeyA", mod: true }] },
@@ -142,12 +145,12 @@ export interface InputKeyEvent extends KeyInput {
   keyCode: number;
 }
 
-export type InputKeyAction = "submit" | "close" | "copy" | "save" | "block";
+export type InputKeyAction = "submit" | "close" | "copy" | "save" | "pin" | "block";
 
 /**
  * What a key does in a comment or text input; null leaves it to the input. Enter and Esc belong to the IME
  * while it composes (some engines report only keyCode 229). The window shortcuts do not reach an input, so
- * copy (with no text selected in the field) and save are taken here: they commit the text, then finish.
+ * copy (with no text selected in the field), save and pin are taken here: they commit the text, then finish.
  */
 export function inputKeyAction(e: InputKeyEvent, mac: boolean, textSelected: boolean): InputKeyAction | null {
   if (e.key === "Enter" || e.key === "Escape") {
@@ -159,7 +162,7 @@ export function inputKeyAction(e: InputKeyEvent, mac: boolean, textSelected: boo
   }
   const cmd = matchKey(e, mac);
   if (cmd === "copy" && !textSelected && !e.repeat) return "copy";
-  if (cmd === "save") return e.repeat ? "block" : "save";
+  if (cmd === "save" || cmd === "pin") return e.repeat ? "block" : cmd;
   return null;
 }
 

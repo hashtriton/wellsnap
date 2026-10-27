@@ -197,6 +197,8 @@ function finishFailedKey(action: FinishAction): string {
       return "overlay.notices.saveFailed";
     case "copy":
       return "overlay.notices.copyFailed";
+    case "pin":
+      return "overlay.notices.pinFailed";
     // Copy all fails before anything is persisted only when adding to the set fails.
     case "addToSet":
     case "copyAll":
@@ -1631,10 +1633,11 @@ export class Editor {
     this.requestRender();
     let exported = false;
     try {
-      const letter = action === "copy" || action === "save" ? payload.setLetter : (payload.setLetter ?? "A");
+      const letter = action === "copy" || action === "save" || action === "pin" ? payload.setLetter : (payload.setLetter ?? "A");
       const format: ImageFormat = action === "save" ? this.settings.imageFormat : "png";
       const list = this.history.current;
-      const placement = this.settings.commentPlacement;
+      // A pin has nowhere to put separate text, so its comments are always drawn on it.
+      const placement = action === "pin" ? "onImage" : this.settings.commentPlacement;
       this.ensurePixels();
       const result = await exportImage({
         frame: this.base,
@@ -1726,6 +1729,7 @@ export class Editor {
       case "addToSet":
       case "copy":
       case "save":
+      case "pin":
         void this.finish(cmd);
         return;
       case "undo":

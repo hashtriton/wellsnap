@@ -176,8 +176,14 @@ describe("finishMeta", () => {
       commentsOnImage: false,
       format: "png",
       scale: 1.5,
+      origin: [100, 100],
       tools: { mark: 2, arrow: 1 },
     });
+  });
+
+  it("puts the rounded top-left corner of the selection in the origin, where a pin opens", () => {
+    const meta = finishMeta({ ...base, placement: "onImage", action: "pin", crop: { x: 10.4, y: 20.6, w: 50, h: 50 } });
+    expect(meta).toMatchObject({ action: "pin", origin: [10, 21] });
   });
 
   it("counts the annotations per tool", () => {

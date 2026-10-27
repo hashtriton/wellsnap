@@ -13,6 +13,7 @@ import {
   CaptionIcon,
   CloseIcon,
   CopyIcon,
+  PinIcon,
   ImageTextIcon,
   MarkerIcon,
   MarkIcon,
@@ -285,6 +286,15 @@ export function Toolbar({ editor, view, t }: Props) {
           onClick={() => void editor.finish("addToSet")}
         >
           {spinnerOr("addToSet", <PlusIcon />)}
+        </ToolButton>
+        <ToolButton {...common}
+          id="pin"
+          label={t("overlay.pin")}
+          tip={withKey(t("overlay.pinHint"), "pin")}
+          disabled={busy}
+          onClick={() => void editor.finish("pin")}
+        >
+          {spinnerOr("pin", <PinIcon />)}
         </ToolButton>
         <ToolButton {...common}
           id="save"

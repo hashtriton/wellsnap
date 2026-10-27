@@ -56,6 +56,8 @@ pub struct AppState {
     pub update: Mutex<UpdatePhase>,
     /// One-picture sheets composed by the strip webview.
     pub sheets: crate::sheet::SheetJobs,
+    /// Images of the pinned screenshots on screen.
+    pub pins: Mutex<crate::pins::Pins>,
 }
 
 impl AppState {
@@ -72,6 +74,7 @@ impl AppState {
             hotkeys_suspended: AtomicBool::new(false),
             update: Mutex::new(UpdatePhase::Idle),
             sheets: crate::sheet::SheetJobs::default(),
+            pins: Mutex::new(crate::pins::Pins::default()),
         }
     }
 

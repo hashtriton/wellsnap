@@ -52,6 +52,8 @@ pub enum FinishAction {
     AddToSet,
     /// Add to the set and copy the whole set as files.
     CopyAll,
+    /// Show the snapshot in its own window above the others (pins.rs); the clipboard is left alone.
+    Pin,
 }
 
 /// Why the overlay finished the way it did, when the toast should say more than usual.
@@ -83,6 +85,9 @@ pub struct FinishMeta {
     pub scale: f32,
     #[serde(default)]
     pub hint: Option<FinishHint>,
+    /// Top-left corner of the selection in physical pixels of the capture monitor: a pin opens there.
+    #[serde(default)]
+    pub origin: Option<(i32, i32)>,
     /// Annotations per drawing tool, for the usage counters. Keys come from the webview: only the names in
     /// the overlay's DRAW_TOOLS may become counters.
     #[serde(default)]
@@ -104,6 +109,8 @@ enum Finished {
     AddedAndCopied(Result<(), String>),
     /// Added to the set in one-picture mode: the picture is built and copied once the overlay is gone.
     AddedThenPicture,
+    /// The pin window shows itself once its page is ready.
+    Pinned,
 }
 
 /// Runs the action while the overlay stays open, so a failed copy, save or add keeps the annotated snapshot:
@@ -129,6 +136,10 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
             copy_single(image, text).map(Finished::Copied)
         }
         FinishAction::Save => save_one(app, &image, &meta.format).map(Finished::Saved),
+        FinishAction::Pin => {
+            let monitor = state.overlay.lock().unwrap().last_monitor.clone();
+            crate::pins::open(app, image, (meta.width, meta.height), monitor, meta.origin).map(|()| Finished::Pinned)
+        }
         FinishAction::AddToSet | FinishAction::CopyAll => {
             add_to_set(app, &image, &meta, marks.clone()).map(|()| match meta.action {
                 // The strip composes the picture, and for the first snapshot of a set it does not exist yet:
@@ -159,11 +170,11 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
         let ov = state.overlay.lock().unwrap();
         ov.active && ov.capture_id == meta.capture_id
     };
-    // A single copy or save with lettered badges keeps its letter: the next snapshot added to the set gets the
-    // following one, so a chat never shows two different screenshots labelled C1. Done before the hide, while
-    // no new capture can read the next letter.
+    // A single copy, save or pin (it can be copied from its window) with lettered badges keeps its letter: the
+    // next snapshot added to the set gets the following one, so a chat never shows two different screenshots
+    // labelled C1. Done before the hide, while no new capture can read the next letter.
     let reserved = still_ours
-        && matches!(meta.action, FinishAction::Copy | FinishAction::Save)
+        && matches!(meta.action, FinishAction::Copy | FinishAction::Save | FinishAction::Pin)
         && !marks.is_empty()
         && reserve_letter(app, meta.letter);
     if still_ours {
@@ -221,6 +232,7 @@ pub fn finish(app: &AppHandle, label: &str, meta: FinishMeta, image: Vec<u8>) ->
                 }
             }
         }
+        Finished::Pinned => {}
         Finished::AddedThenPicture => {
             // Counted once the picture is on the clipboard, like a set copy that worked.
             nudge = false;
@@ -487,6 +499,28 @@ pub fn remove_from_set(app: &AppHandle, letter: char) {
         delete_later(app, path);
     }
     after_set_changed(app);
+}
+
+/// Pins snapshot `letter` of the set, as stored there (with its badges and drawn comments), in the middle of the
+/// monitor under the cursor. A failure, such as too many pins, is shown as a notice with the reason.
+pub fn pin_from_set(app: &AppHandle, letter: char) {
+    let pinned = (|| {
+        let snapshot = {
+            let state = app.state::<AppState>();
+            let guard = state.session.lock().unwrap();
+            guard.as_ref().and_then(|s| s.get(letter)).map(|s| (s.path.clone(), s.width, s.height))
+        };
+        let (path, width, height) = snapshot.ok_or("no such snapshot")?;
+        let png = std::fs::read(&path).map_err(|e| e.to_string())?;
+        crate::pins::open(app, png, (width, height), None, None)
+    })();
+    match pinned {
+        Ok(()) => crate::telemetry::count("pins_from_strip"),
+        Err(err) => {
+            log::warn!("could not pin snapshot {letter}: {err}");
+            crate::notice::toast_error(app, tr(app.state::<AppState>().lang(), "toast.pinFailed"), Some(&err));
+        }
+    }
 }
 
 /// Deletes a removed snapshot file, a cleared set folder or an evicted sheet after the grace period, unless it

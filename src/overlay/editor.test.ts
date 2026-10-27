@@ -272,6 +272,16 @@ describe("failed finish", () => {
     expect(editor.getView().notice).toEqual({ key: "overlay.notices.addFailed", detail: undefined, tone: "error" });
   });
 
+  it("pins with the comments drawn on, the badges as on screen and the corner where it opens", async () => {
+    withAnnotation();
+    api.overlayFinish.mockRejectedValueOnce("too many pins");
+    await editor.finish("pin");
+    expect(editor.getView().notice).toMatchObject({ key: "overlay.notices.pinFailed", detail: "too many pins" });
+    const meta = (api.overlayFinish.mock.calls[0] as unknown[])[1] as { action: string; letter: string | null; commentsOnImage: boolean; origin: number[] };
+    expect(meta).toMatchObject({ action: "pin", letter: null, commentsOnImage: true });
+    expect(meta.origin).toHaveLength(2);
+  });
+
   it("stays quiet when the core already reset the overlay", async () => {
     withAnnotation();
     api.overlayFinish.mockImplementationOnce(() => {

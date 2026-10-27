@@ -8,7 +8,7 @@ import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // Each Tauri window loads its own page; there is no "main" window (tray app).
-const pages = ["overlay", "strip", "notice", "settings", "onboarding"];
+const pages = ["overlay", "strip", "pin", "notice", "settings", "onboarding"];
 const root = fileURLToPath(new URL(".", import.meta.url));
 
 const sentryOrg = process.env.SENTRY_ORG || "wellsnap-zw";

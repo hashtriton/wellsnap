@@ -291,6 +291,59 @@ pub fn set_remove(app: AppHandle, letter: char) {
     actions::remove_from_set(&app, letter);
 }
 
+/// Pins a snapshot of the set (a click on its thumbnail in the strip); a failure is shown as a notice.
+#[tauri::command]
+pub async fn pin_snapshot(app: AppHandle, letter: char) {
+    actions::pin_from_set(&app, letter);
+}
+
+#[tauri::command]
+pub fn pin_info(window: WebviewWindow) -> Result<crate::pins::PinInfo, String> {
+    crate::pins::info(&window)
+}
+
+#[tauri::command]
+pub fn pin_show(window: WebviewWindow) {
+    crate::pins::show(&window);
+}
+
+#[tauri::command]
+pub fn pin_resize(window: WebviewWindow, width: u32, height: u32, anchor_x: f64, anchor_y: f64) {
+    crate::pins::resize(&window, width, height, (anchor_x, anchor_y));
+}
+
+#[tauri::command]
+pub fn pin_nudge(window: WebviewWindow, dx: i32, dy: i32) {
+    crate::pins::nudge(&window, dx, dy);
+}
+
+/// True when the system faded the window itself (macOS); the page then keeps its image opaque.
+#[tauri::command]
+pub fn pin_opacity(window: WebviewWindow, opacity: f64) -> bool {
+    crate::pins::set_opacity(&window, opacity)
+}
+
+#[tauri::command]
+pub async fn pin_copy(window: WebviewWindow) -> Result<(), String> {
+    crate::pins::copy(&window)
+}
+
+#[tauri::command]
+pub async fn pin_save(window: WebviewWindow) -> Result<(), String> {
+    crate::pins::save(&window)
+}
+
+/// Async: a window destroyed from its own synchronous command would be torn down under the running call.
+#[tauri::command]
+pub async fn pin_close(window: WebviewWindow) {
+    let _ = window.destroy();
+}
+
+#[tauri::command]
+pub async fn pin_close_all(app: AppHandle) {
+    crate::pins::close_all(&app);
+}
+
 #[tauri::command]
 pub fn start_capture(app: AppHandle) {
     crate::overlay::begin_capture(&app);

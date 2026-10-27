@@ -6,6 +6,7 @@ export const strip: typeof ru = {
   noComments: "no comments",
   snapshot: "Screenshot {letter}",
   remove: "Remove screenshot {letter} from the set",
+  pinHint: "Click to pin it on top of windows",
   copyAll: "Copy all",
   copyAllHint:
     "Copy every screenshot as files: one paste sends them as one album. Comments drawn on the images go with them; to send separate comment text too, use paste with text",

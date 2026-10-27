@@ -1,5 +1,6 @@
 //! `wsnap` custom URI scheme: serves frozen frames to overlays and snapshot images to the strip.
-//! URLs: frame/<captureId>/<overlayLabel> (raw RGBA) and snap/<sessionId>/<letter>/<revision> (PNG).
+//! URLs: frame/<captureId>/<overlayLabel> (raw RGBA), snap/<sessionId>/<letter>/<revision> (PNG) and
+//! pin/<id> (PNG of a pinned screenshot).
 //! Built on the JS side with `convertFileSrc(path, "wsnap")`.
 
 use crate::state::AppState;
@@ -36,6 +37,11 @@ fn route(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
                 None => not_found(),
             }
         }
+        // Not cached: ids start over with every run, and each pin window loads its image once.
+        ["pin", id] => match id.parse::<u64>().ok().and_then(|id| crate::pins::png(app, id)) {
+            Some(png) => ok("image/png", png.as_ref().clone(), "no-store"),
+            None => not_found(),
+        },
         _ => not_found(),
     }
 }

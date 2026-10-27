@@ -105,6 +105,14 @@ export const SaveIcon = () => (
   </Svg>
 );
 
+export const PinIcon = () => (
+  <Svg>
+    <path d="M9 4.5h6" />
+    <path d="M10 4.5v5.2l-3 3.3h10l-3-3.3V4.5" />
+    <path d="M12 13v6.5" />
+  </Svg>
+);
+
 export const CopyIcon = () => (
   <Svg>
     <rect x="8.5" y="8.5" width="11" height="11" rx="2" />

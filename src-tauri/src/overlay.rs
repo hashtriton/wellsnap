@@ -324,6 +324,20 @@ fn cursor_point(app: &AppHandle) -> Option<(f64, f64)> {
     Some((p.x, p.y))
 }
 
+/// The monitor under the cursor, else the first one (pins.rs).
+pub fn monitor_under_cursor(app: &AppHandle) -> Option<MonitorInfo> {
+    let monitors = capture::monitors(app);
+    let cursor = cursor_point(app);
+    let under = cursor.and_then(|(cx, cy)| {
+        monitors.iter().position(|m| {
+            let [x, y, w, h] = monitor_rect(m);
+            cx >= x && cx < x + w && cy >= y && cy < y + h
+        })
+    });
+    let index = under.unwrap_or(0);
+    monitors.into_iter().nth(index)
+}
+
 /// Monitor rect in the space the cursor and window placement use: global points on macOS, where each
 /// monitor's physical rect has its own scale, and physical pixels elsewhere.
 fn monitor_rect(m: &MonitorInfo) -> [f64; 4] {

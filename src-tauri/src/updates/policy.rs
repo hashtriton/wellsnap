@@ -132,6 +132,8 @@ pub struct GateInput {
     pub set_unchanged_for: Option<Duration>,
     /// Settings or onboarding is open.
     pub ui_window_open: bool,
+    /// Pinned screenshots are on screen; they are not restored after a restart.
+    pub pins_open: bool,
     /// Settings records a hotkey.
     pub hotkeys_suspended: bool,
     /// Time since the last keyboard or mouse input; None when the system does not tell.
@@ -156,6 +158,7 @@ pub enum Block {
     LastCopy,
     SnapshotSet,
     Window,
+    Pins,
     HotkeyRecording,
     NotIdle,
     Fullscreen,
@@ -181,6 +184,7 @@ pub fn install_gate(input: &GateInput) -> Result<(), Block> {
     check(unattended, input.last_copy, Block::LastCopy)?;
     check(auto, input.set_unchanged_for.is_some_and(|d| d < SET_UNCHANGED_FOR), Block::SnapshotSet)?;
     check(unattended, input.ui_window_open, Block::Window)?;
+    check(unattended, input.pins_open, Block::Pins)?;
     check(unattended, input.hotkeys_suspended, Block::HotkeyRecording)?;
     let idle = input.idle.is_some_and(|d| d >= IDLE_FOR) && input.idle_on_previous_tick;
     check(auto, !idle, Block::NotIdle)?;
@@ -415,7 +419,7 @@ mod tests {
     fn gate_blocks_each_condition_alone() {
         type Change = fn(&mut GateInput);
         // (change, block, applies in [Auto, Login, Quit, Manual])
-        let cases: [(Change, Block, [bool; 4]); 15] = [
+        let cases: [(Change, Block, [bool; 4]); 16] = [
             (|i| i.capture_active = true, Block::Capture, [true, true, true, true]),
             (|i| i.smart_paste_busy = true, Block::SmartPaste, [true, true, true, true]),
             (|i| i.since_last_use = Some(mins(9)), Block::RecentlyUsed, [true, false, false, false]),
@@ -423,6 +427,7 @@ mod tests {
             (|i| i.last_copy = true, Block::LastCopy, [true, true, false, false]),
             (|i| i.set_unchanged_for = Some(mins(60)), Block::SnapshotSet, [true, false, false, false]),
             (|i| i.ui_window_open = true, Block::Window, [true, true, false, false]),
+            (|i| i.pins_open = true, Block::Pins, [true, true, false, false]),
             (|i| i.hotkeys_suspended = true, Block::HotkeyRecording, [true, true, false, false]),
             (|i| i.idle = Some(mins(4)), Block::NotIdle, [true, false, false, false]),
             (|i| i.idle = None, Block::NotIdle, [true, false, false, false]),

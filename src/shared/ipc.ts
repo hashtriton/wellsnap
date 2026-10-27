@@ -126,7 +126,7 @@ export interface Mark {
   comment: string;
 }
 
-export type FinishAction = "copy" | "save" | "addToSet" | "copyAll";
+export type FinishAction = "copy" | "save" | "addToSet" | "copyAll" | "pin";
 
 export interface FinishMeta {
   captureId: number;
@@ -141,8 +141,17 @@ export interface FinishMeta {
   /** Physical px per CSS px of the capture monitor, so snapshots from mixed-DPI monitors compose at one size. */
   scale: number;
   hint?: FinishHint;
+  /** Top-left corner of the selection in physical px of the capture monitor: a pin opens there. */
+  origin: [number, number];
   /** Annotations per drawing tool (keys from DRAW_TOOLS), for the anonymous usage counters. */
   tools: Record<string, number>;
+}
+
+export interface PinInfo {
+  id: number;
+  /** Image size in px. */
+  width: number;
+  height: number;
 }
 
 export interface Snapshot {
@@ -308,6 +317,23 @@ export const api = {
   setSaveAll: () => invoke<number>("set_save_all"),
   setClear: () => invoke<void>("set_clear"),
   setRemove: (letter: string) => invoke<void>("set_remove", { letter }),
+  pinSnapshot: (letter: string) => invoke<void>("pin_snapshot", { letter }),
+
+  // Pinned screenshot windows (src/pin); each command acts on the calling window.
+  pinInfo: () => invoke<PinInfo>("pin_info"),
+  /** Shows the window once its image is decoded. */
+  pinShow: () => invoke<void>("pin_show"),
+  /** Physical size of the window; `anchorX`/`anchorY` (0..1 of the window) stay in place on screen. */
+  pinResize: (width: number, height: number, anchorX: number, anchorY: number) =>
+    invoke<void>("pin_resize", { width, height, anchorX, anchorY }),
+  /** Moves the window by logical px. */
+  pinNudge: (dx: number, dy: number) => invoke<void>("pin_nudge", { dx, dy }),
+  /** True when the system faded the window itself (macOS). */
+  pinOpacity: (opacity: number) => invoke<boolean>("pin_opacity", { opacity }),
+  pinCopy: () => invoke<void>("pin_copy"),
+  pinSave: () => invoke<void>("pin_save"),
+  pinClose: () => invoke<void>("pin_close"),
+  pinCloseAll: () => invoke<void>("pin_close_all"),
   /** `png` is the composed sheet; metadata travels in a header to keep the body raw. */
   sheetPut: (png: Uint8Array, meta: SheetPutMeta) =>
     invoke<void>("sheet_put", png, { headers: { "x-meta": encodeURIComponent(JSON.stringify(meta)) } }),
@@ -368,6 +394,11 @@ export const events = {
   onUpdateStatus: (cb: (s: UpdateStatus) => void) => listen<UpdateStatus>("update:status", (e) => cb(e.payload)),
   onSheetRequest: (cb: (r: SheetRequest) => void) => listen<SheetRequest>("sheet:request", (e) => cb(e.payload)),
 };
+
+/** URL of a pinned screenshot (served by the `wsnap` protocol). */
+export function pinUrl(id: number): string {
+  return convertFileSrc(`pin/${id}`, "wsnap");
+}
 
 /** URL of a snapshot image in the current set (served by the `wsnap` protocol). */
 export function snapshotUrl(sessionId: string, letter: string, revision: number): string {

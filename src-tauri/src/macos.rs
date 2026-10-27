@@ -51,6 +51,11 @@ pub fn configure_floating(win: &WebviewWindow) {
     });
 }
 
+/// Fades a whole pin window (pins.rs): the webview of an opaque window cannot show what is under it.
+pub fn set_alpha(win: &WebviewWindow, alpha: f64) {
+    with_ns_window(win, move |window| window.setAlphaValue(alpha));
+}
+
 /// Call right after an overlay is shown, instead of `set_always_on_top`: tao's always-on-top is the floating
 /// level, below the menu bar and the Dock. Also remembers the frontmost app before WellSnap takes focus.
 pub fn overlay_shown(win: &WebviewWindow) {

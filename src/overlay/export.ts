@@ -68,17 +68,19 @@ export interface MetaInput {
 
 /** Metadata for `overlay_finish`; with the comments on the image the core does not repeat them as text. */
 export function finishMeta(m: MetaInput): FinishMeta {
+  const crop = exportCrop(m.crop);
   return {
     captureId: m.captureId,
     action: m.action,
     width: m.image.width,
     height: m.image.height,
     letter: m.letter,
-    marks: marksMeta(m.annotations, exportCrop(m.crop)),
+    marks: marksMeta(m.annotations, crop),
     commentsOnImage: m.placement === "onImage",
     format: m.format,
     scale: m.scale,
     hint: m.hint,
+    origin: [crop.x, crop.y],
     tools: toolCounts(m.annotations),
   };
 }

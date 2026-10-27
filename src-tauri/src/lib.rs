@@ -15,6 +15,7 @@ mod macos;
 mod notice;
 mod overlay;
 mod paste;
+mod pins;
 mod printscreen;
 mod protocol;
 mod session;
@@ -77,6 +78,9 @@ pub fn run() {
             }
             if overlay::is_overlay_label(label) {
                 overlay::on_window_event(app, label, event);
+            }
+            if pins::is_pin_label(label) && matches!(event, tauri::WindowEvent::Destroyed) {
+                pins::closed(app, label);
             }
         })
         .setup(|app| {
@@ -144,6 +148,16 @@ pub fn run() {
             commands::sheet_pending,
             commands::set_clear,
             commands::set_remove,
+            commands::pin_snapshot,
+            commands::pin_info,
+            commands::pin_show,
+            commands::pin_resize,
+            commands::pin_nudge,
+            commands::pin_opacity,
+            commands::pin_copy,
+            commands::pin_save,
+            commands::pin_close,
+            commands::pin_close_all,
             commands::start_capture,
             commands::open_settings,
             commands::open_external,

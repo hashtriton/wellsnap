@@ -13,6 +13,7 @@ Press the hotkey, select an area, mark what matters and paste it into a chat. Se
 - Copy, save to a folder, or add to a set; paste a whole set with text in one step ("paste with text").
 - Paste that knows the target program: an album with a caption in Telegram, attachments in chats, pictures inline in Word and mail. See the [paste targets](docs/paste-targets.md).
 - Ctrl+V (Cmd+V) pastes the screenshots together with the comment text while WellSnap's copy is on the clipboard; it can be turned off.
+- Pin a screenshot on top of all windows to compare it with a document; move, zoom and fade it.
 - Customizable hotkeys, Russian and English interface, light and dark themes.
 - Quiet automatic updates.
 

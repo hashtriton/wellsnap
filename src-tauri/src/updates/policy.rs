@@ -12,9 +12,6 @@ pub const CHECK_RETRY: Duration = Duration::from_secs(60 * 60);
 pub const WAKE_GAP: Duration = Duration::from_secs(3 * 60);
 /// No install right after a wake: the user is probably about to sit down.
 pub const RESUME_GRACE: Duration = Duration::from_secs(2 * 60);
-/// A new version waits this long plus the install's own 0-23 h bucket, so a bad release can still be pulled.
-pub const SOAK_HOURS: u64 = 24;
-pub const BUCKETS: u8 = 24;
 pub const UNUSED_FOR: Duration = Duration::from_secs(10 * 60);
 pub const SET_UNCHANGED_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 pub const IDLE_FOR: Duration = Duration::from_secs(5 * 60);
@@ -51,10 +48,10 @@ pub fn just_resumed(since_resume: Option<Duration>) -> bool {
     since_resume.is_some_and(|d| d < RESUME_GRACE)
 }
 
-/// When version V, first seen at `first_seen`, may install automatically. `override_hours` comes from the
-/// release's latest.json (`"wellsnap": {"soakHours": N}`) and replaces both the base and the bucket.
-pub fn soak_until(first_seen: i64, bucket: u8, override_hours: Option<u64>) -> i64 {
-    let hours = override_hours.unwrap_or(SOAK_HOURS + u64::from(bucket.min(BUCKETS - 1)));
+/// When version V, first seen at `first_seen`, may install automatically: at once, unless the release's
+/// latest.json holds it back for `override_hours` (`"wellsnap": {"soakHours": N}`).
+pub fn soak_until(first_seen: i64, override_hours: Option<u64>) -> i64 {
+    let hours = override_hours.unwrap_or(0);
     first_seen.saturating_add(i64::try_from(hours.saturating_mul(3600)).unwrap_or(i64::MAX))
 }
 
@@ -329,20 +326,12 @@ mod tests {
     }
 
     #[test]
-    fn soak_is_base_plus_bucket_or_the_override() {
+    fn a_release_installs_at_once_unless_it_holds_itself_back() {
         let seen = 10_000;
-        let cases: [(u8, Option<u64>, i64); 6] = [
-            (0, None, seen + 24 * H),
-            (23, None, seen + 47 * H),
-            (200, None, seen + 47 * H),
-            (23, Some(0), seen),
-            (0, Some(2), seen + 2 * H),
-            (5, Some(u64::MAX), i64::MAX),
-        ];
-        for (bucket, over, until) in cases {
-            assert_eq!(soak_until(seen, bucket, over), until, "bucket {bucket}, override {over:?}");
-        }
-        assert_eq!(soak_until(seen, 23, Some(0)), seen, "override 0 installs at once");
+        assert_eq!(soak_until(seen, None), seen);
+        assert_eq!(soak_until(seen, Some(0)), seen);
+        assert_eq!(soak_until(seen, Some(2)), seen + 2 * H);
+        assert_eq!(soak_until(seen, Some(u64::MAX)), i64::MAX);
     }
 
     #[test]

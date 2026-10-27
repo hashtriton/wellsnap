@@ -12,7 +12,6 @@ mod system;
 use crate::state::AppState;
 use policy::{Block, GateInput, GateMode, StartupOutcome};
 use serde::Serialize;
-use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -343,8 +342,8 @@ fn info_of(update: &Update) -> UpdateInfo {
 fn apply_check(app: &AppHandle, update: Option<&Update>) {
     let next = match update {
         Some(u) => {
-            let (_, (seen, bucket)) = store::update(|s| s.note_offered(&u.version, now_secs(), random_bucket));
-            let auto_after = policy::soak_until(seen, bucket, policy::soak_override(&u.raw_json));
+            let (_, seen) = store::update(|s| s.note_offered(&u.version, now_secs()));
+            let auto_after = policy::soak_until(seen, policy::soak_override(&u.raw_json));
             UpdatePhase::Available { info: info_of(u), auto_after }
         }
         None => UpdatePhase::Idle,
@@ -716,12 +715,6 @@ fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// Seeded from the OS random source through the standard library's hasher keys.
-fn random_bucket() -> u8 {
-    let n = std::collections::hash_map::RandomState::new().build_hasher().finish();
-    (n % u64::from(policy::BUCKETS)) as u8
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,13 +813,6 @@ mod tests {
         }
         assert_ne!(refusal_detail(Lang::Ru, REFUSED_BUSY), refusal_detail(Lang::En, REFUSED_BUSY));
         assert_eq!(refusal_detail(Lang::Ru, "error sending request"), "error sending request");
-    }
-
-    #[test]
-    fn buckets_stay_in_range() {
-        for _ in 0..200 {
-            assert!(random_bucket() < policy::BUCKETS);
-        }
     }
 
     #[test]

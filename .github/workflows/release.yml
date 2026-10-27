@@ -230,3 +230,22 @@ jobs:
           npx --yes @sentry/cli@3.8.2 releases new "wellsnap@$version"
           npx --yes @sentry/cli@3.8.2 debug-files upload --include-sources "${files[@]}"
           npx --yes @sentry/cli@3.8.2 releases finalize "wellsnap@$version"
+
+  # Copies before 0.3.0 wait 24-47 h before installing a new version on their own; latest.json can tell them
+  # otherwise ("wellsnap": {"soakHours": N}, policy.rs). From 0.3.0 on there is no wait unless a release sets
+  # one here. Runs after both builds, which merge their platforms into the same latest.json of the draft.
+  updater-json:
+    name: No rollout wait in latest.json
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set soakHours to 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p latest.json -D "$RUNNER_TEMP"
+          jq '.wellsnap = {soakHours: 0}' "$RUNNER_TEMP/latest.json" > "$RUNNER_TEMP/out.json"
+          mv "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/latest.json"
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/latest.json" --clobber
+          jq -c '{version, wellsnap, platforms: (.platforms | keys)}' "$RUNNER_TEMP/latest.json"

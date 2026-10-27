@@ -12,10 +12,8 @@ pub struct UpdateStore {
     /// Version of the previous run; tells an update apart from a first run.
     pub last_run_version: Option<String>,
     pub last_check_at: Option<i64>,
-    /// When the offered version was first seen: its waiting time counts from here.
+    /// When the offered version was first seen: a release that holds itself back counts from here.
     pub first_seen: Option<FirstSeen>,
-    /// This install's random 0-23 h added to the wait, made once and never sent anywhere.
-    pub bucket: Option<u8>,
     /// Written right before an install; a start that is still the old version counts it as failed.
     pub attempt: Option<Attempt>,
     /// A version whose package failed signature verification: never installed automatically.
@@ -99,18 +97,15 @@ impl UpdateStore {
         self.last_run_version = Some(current.to_string());
     }
 
-    /// Remembers when `version` was first offered and makes the bucket on first use. Returns (first seen,
-    /// bucket).
-    pub fn note_offered(&mut self, version: &str, now: i64, new_bucket: impl FnOnce() -> u8) -> (i64, u8) {
-        let bucket = *self.bucket.get_or_insert_with(|| new_bucket() % policy::BUCKETS);
-        let seen = match &self.first_seen {
+    /// Remembers when `version` was first offered; returns that time.
+    pub fn note_offered(&mut self, version: &str, now: i64) -> i64 {
+        match &self.first_seen {
             Some(f) if f.version == version => f.at,
             _ => {
                 self.first_seen = Some(FirstSeen { version: version.to_string(), at: now });
                 now
             }
-        };
-        (seen, bucket)
+        }
     }
 
     /// Failed attempts for `version` (the attempt in progress included until the next start clears it).
@@ -184,7 +179,6 @@ mod tests {
         assert_eq!(load(&path), UpdateStore::default());
         let store = UpdateStore {
             last_run_version: Some("0.1.0".into()),
-            bucket: Some(7),
             attempt: Some(Attempt { to: "0.2.0".into(), count: 1, at: 5, set_cleared: true, notes: Some("n".into()) }),
             ..Default::default()
         };
@@ -194,8 +188,9 @@ mod tests {
         assert!(json.contains("\"lastRunVersion\"") && json.contains("\"setCleared\""));
         std::fs::write(&path, "{ nope").unwrap();
         assert_eq!(load(&path), UpdateStore::default());
-        std::fs::write(&path, r#"{"bucket": 3}"#).unwrap();
-        assert_eq!(load(&path).bucket, Some(3), "missing fields default");
+        // Written before 0.3.0, with the rollout bucket that is gone now.
+        std::fs::write(&path, r#"{"bucket": 3, "lastCheckAt": 9}"#).unwrap();
+        assert_eq!(load(&path).last_check_at, Some(9), "missing fields default, old ones are ignored");
     }
 
     #[test]
@@ -258,10 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn first_seen_is_kept_per_version_and_the_bucket_once() {
+    fn first_seen_is_kept_per_version() {
         let mut s = UpdateStore::default();
-        assert_eq!(s.note_offered("0.2.0", 10, || 30), (10, 6));
-        assert_eq!(s.note_offered("0.2.0", 99, || 1), (10, 6), "same version: same start, same bucket");
-        assert_eq!(s.note_offered("0.3.0", 50, || 1), (50, 6), "a newer version waits from its own start");
+        assert_eq!(s.note_offered("0.2.0", 10), 10);
+        assert_eq!(s.note_offered("0.2.0", 99), 10, "same version: same start");
+        assert_eq!(s.note_offered("0.3.0", 50), 50, "a newer version waits from its own start");
     }
 }

@@ -176,7 +176,7 @@ fn window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(win) = app.get_webview_window(LABEL) {
         return Some(win);
     }
-    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notice.html".into()))
+    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notice.html".into()))
         .title("WellSnap")
         .decorations(false)
         .transparent(true)
@@ -186,7 +186,13 @@ fn window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .shadow(false)
         .focused(false)
         .visible(false)
-        .inner_size(TOAST_SIZE.0, TOAST_SIZE.1)
+        .inner_size(TOAST_SIZE.0, TOAST_SIZE.1);
+    // Windows: `focused(false)` only covers the creation, every later show activates the window, and the "Copied"
+    // toast would take the keyboard from the chat and swallow the Alt+Tab to it. A window that cannot be
+    // activated keeps the keyboard where it is; clicks still reach the page, keys never do (Esc on the cards).
+    #[cfg(windows)]
+    let builder = builder.focusable(false);
+    builder
         .build()
         .map_err(|err| log::error!("could not create notice window: {err}"))
         .ok()

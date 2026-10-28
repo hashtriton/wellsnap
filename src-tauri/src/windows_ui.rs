@@ -112,30 +112,35 @@ pub fn sync_strip(app: &AppHandle) {
         let appearing = existing.as_ref().is_none_or(|w| !w.is_visible().unwrap_or(false));
         let win = match existing {
             Some(win) => win,
-            None => match WebviewWindowBuilder::new(&app, STRIP, WebviewUrl::App("strip.html".into()))
-                .title("WellSnap")
-                .decorations(false)
-                .transparent(true)
-                .resizable(false)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .shadow(false)
-                .focused(false)
-                .visible(false)
-                .content_protected(hide_from_capture)
-                .inner_size(STRIP_WIDTH, STRIP_HEADER + STRIP_ITEM)
-                .build()
-            {
-                Ok(win) => {
-                    #[cfg(target_os = "macos")]
-                    crate::macos::configure_floating(&win);
-                    win
+            None => {
+                let builder = WebviewWindowBuilder::new(&app, STRIP, WebviewUrl::App("strip.html".into()))
+                    .title("WellSnap")
+                    .decorations(false)
+                    .transparent(true)
+                    .resizable(false)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .shadow(false)
+                    .focused(false)
+                    .visible(false)
+                    .content_protected(hide_from_capture)
+                    .inner_size(STRIP_WIDTH, STRIP_HEADER + STRIP_ITEM);
+                // Windows: never activated, like the notice (notice.rs), so adding a snapshot leaves the keyboard
+                // in the app the user is in.
+                #[cfg(windows)]
+                let builder = builder.focusable(false);
+                match builder.build() {
+                    Ok(win) => {
+                        #[cfg(target_os = "macos")]
+                        crate::macos::configure_floating(&win);
+                        win
+                    }
+                    Err(err) => {
+                        log::error!("could not create strip: {err}");
+                        return;
+                    }
                 }
-                Err(err) => {
-                    log::error!("could not create strip: {err}");
-                    return;
-                }
-            },
+            }
         };
         let _ = win.set_content_protected(hide_from_capture);
         let height = STRIP_HEADER + STRIP_ITEM * (count as f64).min(STRIP_MAX_VISIBLE);

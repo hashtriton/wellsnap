@@ -1,6 +1,6 @@
 [package]
 name = "wellsnap"
-version = "0.3.1"
+version = "0.3.2"
 description = "WellSnap: screenshots with arrows, blur and numbered notes"
 authors = ["WellDone"]
 license = "GPL-3.0-or-later"

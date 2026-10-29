@@ -235,6 +235,32 @@ describe("key auto-repeat", () => {
   });
 });
 
+describe("toolbar corner", () => {
+  it("follows the corner where the selection drag ended", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([300, 300], [100, 120]);
+    expect(editor.getView().corner).toEqual({ right: false, bottom: false });
+    drag([150, 50], [400, 260]);
+    expect(editor.getView().corner).toEqual({ right: true, bottom: true });
+  });
+
+  it("takes from a resize only the axes its handle moved", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([100, 100], [300, 300]);
+    // The right edge dragged past the left one: the pointer ends on the left, the bottom stays.
+    drag([300, 200], [40, 200]);
+    expect(editor.getView().selection).toMatchObject({ x: 40, w: 60 });
+    expect(editor.getView().corner).toEqual({ right: false, bottom: true });
+  });
+
+  it("starts at the bottom-right for every capture", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([300, 300], [100, 100]);
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    expect(editor.getView().corner).toEqual({ right: true, bottom: true });
+  });
+});
+
 describe("canvas click", () => {
   it("takes the focus away from a toolbar button", () => {
     withAnnotation();

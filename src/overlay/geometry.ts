@@ -162,29 +162,58 @@ export interface ToolbarPlacement {
   side: Side | "inside";
 }
 
+/** Corner of the selection where its drag ended, so where the pointer is. */
+export interface Corner {
+  right: boolean;
+  bottom: boolean;
+}
+
+/** The corner of `r` nearest to `p`. */
+export function nearestCorner(r: Rect, p: Pt): Corner {
+  return { right: p.x > r.x + r.w / 2, bottom: p.y > r.y + r.h / 2 };
+}
+
 /**
- * Places the toolbar next to the selection (all in CSS px): below, above, right (vertical), left (vertical),
- * else inside the bottom-right corner. Sides blocked by the monitor edge are skipped; the result never
- * leaves the monitor. The horizontal bar is right-aligned with the selection, where the drag usually ends.
+ * Where the toolbar's primary button goes: next to `corner`. `h` and `v` are the button's center along the
+ * horizontal and the vertical bar.
  */
-export function placeToolbar(sel: Rect, horiz: Size, vert: Size, screen: Size, gap = 8, margin = 8): ToolbarPlacement {
+export interface ToolbarFocus {
+  corner: Corner;
+  h: number;
+  v: number;
+}
+
+/**
+ * Places the toolbar next to the selection (all in CSS px): on the edge of the corner where the drag ended
+ * (below or above), then the other one, then right or left vertically (the corner's side first), else inside
+ * the corner. The primary button lands next to that corner, so the pointer only has to move straight to it.
+ * Sides blocked by the monitor edge are skipped; the result never leaves the monitor.
+ */
+export function placeToolbar(sel: Rect, horiz: Size, vert: Size, screen: Size, focus: ToolbarFocus, gap = 8, margin = 8): ToolbarPlacement {
   const right = sel.x + sel.w;
   const bottom = sel.y + sel.h;
-  const hx = clamp(right - horiz.w, margin, Math.max(margin, screen.w - margin - horiz.w));
-  const vy = clamp(bottom - vert.h, margin, Math.max(margin, screen.h - margin - vert.h));
+  const { corner } = focus;
+  const hx = clamp((corner.right ? right : sel.x) - focus.h, margin, Math.max(margin, screen.w - margin - horiz.w));
+  const vy = clamp((corner.bottom ? bottom : sel.y) - focus.v, margin, Math.max(margin, screen.h - margin - vert.h));
   const vertFits = vert.h <= screen.h - 2 * margin;
 
-  if (bottom + gap + horiz.h <= screen.h - margin) return { x: hx, y: bottom + gap, orientation: "horizontal", side: "below" };
-  if (sel.y - gap - horiz.h >= margin) return { x: hx, y: sel.y - gap - horiz.h, orientation: "horizontal", side: "above" };
-  if (vertFits && right + gap + vert.w <= screen.w - margin) {
-    return { x: right + gap, y: vy, orientation: "vertical", side: "right" };
-  }
-  if (vertFits && sel.x - gap - vert.w >= margin) {
-    return { x: sel.x - gap - vert.w, y: vy, orientation: "vertical", side: "left" };
+  const below = (): ToolbarPlacement | null =>
+    bottom + gap + horiz.h <= screen.h - margin ? { x: hx, y: bottom + gap, orientation: "horizontal", side: "below" } : null;
+  const above = (): ToolbarPlacement | null =>
+    sel.y - gap - horiz.h >= margin ? { x: hx, y: sel.y - gap - horiz.h, orientation: "horizontal", side: "above" } : null;
+  const toRight = (): ToolbarPlacement | null =>
+    vertFits && right + gap + vert.w <= screen.w - margin ? { x: right + gap, y: vy, orientation: "vertical", side: "right" } : null;
+  const toLeft = (): ToolbarPlacement | null =>
+    vertFits && sel.x - gap - vert.w >= margin ? { x: sel.x - gap - vert.w, y: vy, orientation: "vertical", side: "left" } : null;
+
+  const order = [...(corner.bottom ? [below, above] : [above, below]), ...(corner.right ? [toRight, toLeft] : [toLeft, toRight])];
+  for (const side of order) {
+    const p = side();
+    if (p) return p;
   }
   return {
-    x: clamp(right - gap - horiz.w, margin, Math.max(margin, screen.w - margin - horiz.w)),
-    y: clamp(bottom - gap - horiz.h, margin, Math.max(margin, screen.h - margin - horiz.h)),
+    x: hx,
+    y: clamp(corner.bottom ? bottom - gap - horiz.h : sel.y + gap, margin, Math.max(margin, screen.h - margin - horiz.h)),
     orientation: "horizontal",
     side: "inside",
   };

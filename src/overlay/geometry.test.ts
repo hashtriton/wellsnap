@@ -78,24 +78,28 @@ describe("snapping", () => {
 });
 
 describe("placeToolbar", () => {
+  // The primary button at the right end of the bar: the bar right-aligned with a selection dragged to its bottom-right.
+  const legacy = { corner: { right: true, bottom: true }, h: horiz.w, v: vert.h };
+  const copyAt = (right: boolean, bottom: boolean) => ({ corner: { right, bottom }, h: 520, v: 450 });
+
   it("goes below the selection, right-aligned", () => {
-    const p = placeToolbar({ x: 300, y: 200, w: 800, h: 400 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 300, y: 200, w: 800, h: 400 }, horiz, vert, screen, legacy);
     expect(p).toEqual({ x: 500, y: 608, orientation: "horizontal", side: "below" });
   });
 
   it("shifts inward when the selection is narrower than the bar near the left edge", () => {
-    const p = placeToolbar({ x: 20, y: 200, w: 100, h: 100 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 20, y: 200, w: 100, h: 100 }, horiz, vert, screen, legacy);
     expect(p.side).toBe("below");
     expect(p.x).toBe(8);
   });
 
   it("goes above when there is no room below", () => {
-    const p = placeToolbar({ x: 300, y: 500, w: 800, h: 560 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 300, y: 500, w: 800, h: 560 }, horiz, vert, screen, legacy);
     expect(p).toEqual({ x: 500, y: 452, orientation: "horizontal", side: "above" });
   });
 
   it("goes to the right side vertically when top and bottom are blocked", () => {
-    const p = placeToolbar({ x: 300, y: 20, w: 800, h: 1040 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 300, y: 20, w: 800, h: 1040 }, horiz, vert, screen, legacy);
     expect(p.side).toBe("right");
     expect(p.orientation).toBe("vertical");
     expect(p.x).toBe(1108);
@@ -104,18 +108,44 @@ describe("placeToolbar", () => {
   });
 
   it("goes to the left side when the right is blocked too", () => {
-    const p = placeToolbar({ x: 300, y: 20, w: 1600, h: 1040 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 300, y: 20, w: 1600, h: 1040 }, horiz, vert, screen, legacy);
     expect(p).toMatchObject({ side: "left", orientation: "vertical", x: 252 });
   });
 
   it("goes inside the bottom-right corner for a full-screen selection", () => {
-    const p = placeToolbar({ x: 0, y: 0, w: 1920, h: 1080 }, horiz, vert, screen);
+    const p = placeToolbar({ x: 0, y: 0, w: 1920, h: 1080 }, horiz, vert, screen, legacy);
     expect(p).toEqual({ x: 1920 - 8 - 600, y: 1080 - 8 - 40, orientation: "horizontal", side: "inside" });
   });
 
   it("skips the vertical sides when the vertical bar is taller than the monitor", () => {
-    const p = placeToolbar({ x: 300, y: 20, w: 800, h: 1040 }, horiz, { w: 40, h: 1100 }, screen);
+    const p = placeToolbar({ x: 300, y: 20, w: 800, h: 1040 }, horiz, { w: 40, h: 1100 }, screen, legacy);
     expect(p.side).toBe("inside");
+  });
+
+  it("puts the primary button right under the end of a drag to the bottom-right", () => {
+    const p = placeToolbar({ x: 300, y: 200, w: 800, h: 400 }, horiz, vert, screen, copyAt(true, true));
+    expect(p).toEqual({ x: 1100 - 520, y: 608, orientation: "horizontal", side: "below" });
+  });
+
+  it("goes above with the button at the left edge after a drag to the top-left", () => {
+    const p = placeToolbar({ x: 600, y: 300, w: 400, h: 200 }, horiz, vert, screen, copyAt(false, false));
+    expect(p).toEqual({ x: 600 - 520, y: 300 - 8 - 40, orientation: "horizontal", side: "above" });
+  });
+
+  it("takes the other edge when the corner's edge has no room", () => {
+    const p = placeToolbar({ x: 600, y: 20, w: 400, h: 200 }, horiz, vert, screen, copyAt(false, false));
+    expect(p).toEqual({ x: 80, y: 228, orientation: "horizontal", side: "below" });
+  });
+
+  it("tries the corner's side first for the vertical bar", () => {
+    const p = placeToolbar({ x: 300, y: 20, w: 800, h: 1040 }, horiz, vert, screen, copyAt(false, true));
+    // The button would be at 1060 - 450; the bar is clamped into the monitor.
+    expect(p).toEqual({ x: 300 - 8 - 40, y: 1080 - 8 - 520, orientation: "vertical", side: "left" });
+  });
+
+  it("goes inside the corner for a full-screen selection", () => {
+    const p = placeToolbar({ x: 0, y: 0, w: 1920, h: 1080 }, horiz, vert, screen, copyAt(false, false));
+    expect(p).toEqual({ x: 8, y: 8, orientation: "horizontal", side: "inside" });
   });
 
   it("never leaves the monitor", () => {
@@ -126,13 +156,16 @@ describe("placeToolbar", () => {
       { x: 0, y: 1040, w: 1920, h: 40 },
       { x: 960, y: 0, w: 5, h: 1080 },
     ];
+    const focuses = [legacy, copyAt(true, true), copyAt(true, false), copyAt(false, true), copyAt(false, false)];
     for (const sel of sels) {
-      const p = placeToolbar(sel, horiz, vert, screen);
-      const size = p.orientation === "horizontal" ? horiz : vert;
-      expect(p.x).toBeGreaterThanOrEqual(8);
-      expect(p.y).toBeGreaterThanOrEqual(8);
-      expect(p.x + size.w).toBeLessThanOrEqual(1920 - 8);
-      expect(p.y + size.h).toBeLessThanOrEqual(1080 - 8);
+      for (const focus of focuses) {
+        const p = placeToolbar(sel, horiz, vert, screen, focus);
+        const size = p.orientation === "horizontal" ? horiz : vert;
+        expect(p.x).toBeGreaterThanOrEqual(8);
+        expect(p.y).toBeGreaterThanOrEqual(8);
+        expect(p.x + size.w).toBeLessThanOrEqual(1920 - 8);
+        expect(p.y + size.h).toBeLessThanOrEqual(1080 - 8);
+      }
     }
   });
 });

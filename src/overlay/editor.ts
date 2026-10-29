@@ -13,6 +13,7 @@ import {
   hitHandle,
   inflate,
   moveRect,
+  nearestCorner,
   normalize,
   placeLoupe,
   resizeRect,
@@ -21,6 +22,7 @@ import {
   snapAxis,
   squareEnd,
   visibleHandles,
+  type Corner,
   type Handle,
 } from "./geometry";
 import { History } from "./history";
@@ -118,6 +120,8 @@ export interface View {
   selection: Rect | null;
   /** The selection is not being dragged: the toolbar may show. */
   settled: boolean;
+  /** Corner of the selection where its last drag ended; the toolbar's primary button goes next to it. */
+  corner: Corner;
   tool: Tool;
   context: ToolContext | null;
   canUndo: boolean;
@@ -228,6 +232,7 @@ export class Editor {
   private scale = 1;
   private phase: Phase = "empty";
   private selection: Rect | null = null;
+  private corner: Corner = { right: true, bottom: true };
   private tool: Tool = "select";
   private history = new History<readonly Annotation[]>([], 200);
   private nextId = 1;
@@ -313,6 +318,7 @@ export class Editor {
       screen: p ? { w: p.width / s, h: p.height / s } : { w: window.innerWidth, h: window.innerHeight },
       selection: this.selection && scaleRect(this.selection, 1 / s),
       settled: this.phase === "ready" && !(this.drag && (this.drag.kind === "moveSel" || this.drag.kind === "resizeSel" || this.drag.kind === "create")),
+      corner: this.corner,
       tool: this.tool,
       context: this.toolContext(),
       canUndo: this.history.canUndo,
@@ -501,6 +507,7 @@ export class Editor {
     this.payload = null;
     this.phase = "empty";
     this.selection = null;
+    this.corner = { right: true, bottom: true };
     this.tool = "select";
     this.history.reset([]);
     this.selectedId = null;
@@ -1168,6 +1175,7 @@ export class Editor {
         const sel = this.selection;
         if (sel && sel.w >= MIN_SELECTION && sel.h >= MIN_SELECTION) {
           this.phase = "ready";
+          this.corner = nearestCorner(sel, end);
           this.touchSizeLabel();
         } else if (d.prev) {
           this.selection = d.prev;
@@ -1180,7 +1188,16 @@ export class Editor {
       }
       case "moveSel":
       case "resizeSel":
-        if (!this.selection || this.selection.w < MIN_SELECTION || this.selection.h < MIN_SELECTION) this.selection = d.orig;
+        if (!this.selection || this.selection.w < MIN_SELECTION || this.selection.h < MIN_SELECTION) {
+          this.selection = d.orig;
+        } else if (d.kind === "resizeSel") {
+          // Only the axes the handle moved: after the right edge the pointer is mid-height, which says nothing.
+          const near = nearestCorner(this.selection, end);
+          this.corner = {
+            right: /[ew]/.test(d.handle) ? near.right : this.corner.right,
+            bottom: /[ns]/.test(d.handle) ? near.bottom : this.corner.bottom,
+          };
+        }
         this.touchSizeLabel();
         break;
       case "draw":

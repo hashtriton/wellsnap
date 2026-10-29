@@ -67,6 +67,8 @@ export function Toolbar({ editor, view, t }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const buttons = useRef<Record<string, HTMLButtonElement | null>>({});
   const sizes = useRef<Partial<Record<Orientation, Size>>>({});
+  /** Center of the primary button along each bar, so it lands where the selection drag ended. */
+  const primaryAt = useRef<Partial<Record<Orientation, number>>>({});
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
   /** Icon-only buttons when the labeled bar is wider than the monitor (very narrow or highly scaled screens). */
   const [compact, setCompact] = useState(false);
@@ -87,10 +89,15 @@ export function Toolbar({ editor, view, t }: Props) {
       return;
     }
     sizes.current[orientation] = { w: box.width, h: box.height };
+    const btn = buttons.current[view.primary]?.getBoundingClientRect();
+    if (orientation === "horizontal") primaryAt.current.horizontal = btn ? btn.left + btn.width / 2 - box.left : box.width;
+    else primaryAt.current.vertical = btn ? btn.top + btn.height / 2 - box.top : box.height;
     const horiz = sizes.current.horizontal ?? { w: box.width, h: box.height };
     // Before the vertical bar was measured, estimate it from the horizontal one (labels become icons).
     const vert = sizes.current.vertical ?? { w: horiz.h, h: horiz.w * 0.8 };
-    const next = placeToolbar(sel, horiz, vert, view.screen);
+    const h = primaryAt.current.horizontal ?? horiz.w;
+    const v = primaryAt.current.vertical ?? (h / horiz.w) * vert.h;
+    const next = placeToolbar(sel, horiz, vert, view.screen, { corner: view.corner, h, v });
     if (next.orientation !== orientation) {
       setOrientation(next.orientation);
       return;

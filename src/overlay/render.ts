@@ -24,6 +24,8 @@ const BUBBLE_MAX_W = 300;
 const BUBBLE_GAP = 6;
 /** Distance kept from the edges of the crop. */
 const BUBBLE_MARGIN = 4;
+/** Distance kept from other badges, bubbles and frames, so neighbours never touch. */
+const BUBBLE_SEP = 3;
 const BUBBLE_TEXT = "#15181E";
 
 export interface MosaicTile {
@@ -338,6 +340,12 @@ function intersects(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+function overlapArea(a: Rect, b: Rect): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
 function inside(r: Rect, room: Rect): boolean {
   const e = 0.01;
   return r.x >= room.x - e && r.y >= room.y - e && r.x + r.w <= room.x + room.w + e && r.y + r.h <= room.y + room.h + e;
@@ -359,9 +367,9 @@ function bubbleSides(a: Callout): Side[] {
 
 /**
  * Bubble with the comment of a callout, next to its badge and inside `crop` (physical px). Tries the sides in
- * order, sliding along the badge to stay inside and off `obstacles` (other badges and bubbles); then the
- * first side that only stays inside; if none fits, clamps into the crop on the first side that stays off the
- * badge. Null for an empty comment.
+ * order, then the same sides slid along the badge, for a spot inside and a little off `obstacles` (other
+ * badges, bubbles and frames); with none free, takes the spot that covers the least of them, clamped into the
+ * crop and off its own badge. A bubble the user moved stays where it was put. Null for an empty comment.
  */
 export function bubbleLayout(
   a: Callout,
@@ -392,6 +400,16 @@ export function bubbleLayout(
   const cy = badge.y + badge.h / 2;
   const slideY = (y: number) => clamp(y, room.y, Math.max(room.y, room.y + room.h - h));
   const slideX = (x: number) => clamp(x, room.x, Math.max(room.x, room.x + room.w - w));
+  const layout = (box: Rect, side: Side): BubbleLayout => ({ box, side, lines, font, padX, padY, lineH, radius: 6 * s });
+
+  if (a.bubble) {
+    // Where the user put it, kept inside the crop; it dodges nothing.
+    const box = { x: slideX(cx + a.bubble.x), y: slideY(cy + a.bubble.y), w, h };
+    const dx = (box.x + w / 2 - cx) / (w + badge.w);
+    const dy = (box.y + h / 2 - cy) / (h + badge.h);
+    return layout(box, Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "right" : "left") : dy >= 0 ? "below" : "above");
+  }
+
   const at = (side: Side): Rect => {
     switch (side) {
       case "right":
@@ -404,24 +422,36 @@ export function bubbleLayout(
         return { x: slideX(cx - w / 2), y: badge.y - gap - h, w, h };
     }
   };
-  const layout = (box: Rect, side: Side): BubbleLayout => ({ box, side, lines, font, padX, padY, lineH, radius: 6 * s });
-
-  const clear = (box: Rect) => !obstacles.some((o) => intersects(box, o));
+  const blocked = obstacles.map((o) => inflate(o, BUBBLE_SEP * s));
+  const clear = (box: Rect) => !blocked.some((o) => intersects(box, o));
+  // Further spots on a side: the bubble slides along it just past whatever lies across its lane, as far as it
+  // still touches the badge's span, nearest first.
+  const slides = (side: Side): Rect[] => {
+    const base = at(side);
+    const across = side === "above" || side === "below";
+    const [lo, hi] = across ? [badge.x - w, badge.x + badge.w] : [badge.y - h, badge.y + badge.h];
+    const start = across ? base.x : base.y;
+    const stops = new Set<number>();
+    for (const o of blocked) {
+      if (across ? o.y < base.y + h && o.y + o.h > base.y : o.x < base.x + w && o.x + o.w > base.x) {
+        for (const v of across ? [o.x + o.w, o.x - w] : [o.y + o.h, o.y - h]) stops.add((across ? slideX : slideY)(clamp(v, lo, hi)));
+      }
+    }
+    stops.delete(start);
+    return [...stops].sort((p, q) => Math.abs(p - start) - Math.abs(q - start)).map((v) => (across ? { ...base, x: v } : { ...base, y: v }));
+  };
   const sides = bubbleSides(a);
-  for (const side of sides) {
-    const box = at(side);
-    if (inside(box, room) && clear(box)) return layout(box, side);
+  const candidates = [...sides.map((side) => ({ side, box: at(side) })), ...sides.flatMap((side) => slides(side).map((box) => ({ side, box })))];
+  const free = candidates.find((c) => inside(c.box, room) && clear(c.box));
+  if (free) return layout(free.box, free.side);
+  // Nowhere free: the spot inside the crop and off its own badge that covers the least of the others.
+  let best: { side: Side; box: Rect; cost: number } | null = null;
+  for (const c of candidates) {
+    const box = { ...c.box, x: slideX(c.box.x), y: slideY(c.box.y) };
+    if (intersects(box, badge)) continue;
+    const cost = obstacles.reduce((sum, o) => sum + overlapArea(box, o), 0);
+    if (!best || cost < best.cost) best = { side: c.side, box, cost };
   }
-  for (const side of sides) {
-    const box = at(side);
-    if (inside(box, room)) return layout(box, side);
-  }
-  const clamped = sides.map((side) => {
-    const box = at(side);
-    return { side, box: { ...box, x: slideX(box.x), y: slideY(box.y) } };
-  });
-  const offBadge = clamped.filter((c) => !intersects(c.box, badge));
-  const best = offBadge.find((c) => clear(c.box)) ?? offBadge[0];
   if (best) return layout(best.box, best.side);
   // A crop too small for any clamped position: stay next to the badge, the crop clips the rest.
   return layout(at(sides[0]), sides[0]);
@@ -485,22 +515,33 @@ function calloutsToPlace(list: readonly Annotation[], scale: number, crop: Rect)
 }
 
 /**
- * Bubbles of the callouts that belong to `crop`, laid out together: each one keeps off the other badges, the
- * `avoid` areas and the bubbles placed before it. Callouts outside the crop get none (their badge is cut
- * off). A callout whose badge is inside a captioned frame ignores that frame and still gets its text there.
+ * Bubbles of the callouts that belong to `crop`, laid out together, in list order: each one keeps off the
+ * other badges, the `avoid` areas and the bubbles placed before it. The bubbles the user moved are placed
+ * first, so the automatic ones make way for them. Callouts outside the crop get none (their badge is cut
+ * off). A callout whose badge lies wholly inside a captioned frame ignores that frame and still gets its text
+ * there; a badge on the edge of a neighbouring frame does not.
  */
 export function layoutCallouts(list: readonly Annotation[], env: Pick<RenderEnv, "scale" | "letter" | "measure">, crop: Rect): PlacedCallout[] {
   const callouts = calloutsToPlace(list, env.scale, crop);
   const badges = callouts.map((c) => markBounds(c, env));
-  const placed: PlacedCallout[] = [];
-  callouts.forEach((callout, i) => {
+  const placed: (PlacedCallout | null)[] = callouts.map(() => null);
+  const boxes: Rect[] = [];
+  const order = callouts.map((_, i) => i).sort((i, j) => Number(!callouts[i].bubble) - Number(!callouts[j].bubble));
+  for (const i of order) {
+    const callout = callouts[i];
     // A rectangle's own badge sits on its corner, inside the inflated frame: its frame always counts.
-    const frames = callouts.flatMap((c, j) => (c.avoid && (j === i || !contains(c.avoid, callout.p)) ? [c.avoid] : []));
-    const obstacles = [...badges.filter((_, j) => j !== i), ...frames, ...placed.map((p) => p.layout.box)];
+    const frames = callouts.flatMap((c, j) => (c.avoid && (j === i || !containsRect(c.avoid, badges[i])) ? [c.avoid] : []));
+    const obstacles = [...badges.filter((_, j) => j !== i), ...frames, ...boxes];
     const layout = bubbleLayout(callout, env, crop, obstacles);
-    if (layout) placed.push({ callout, layout });
-  });
-  return placed;
+    if (!layout) continue;
+    placed[i] = { callout, layout };
+    boxes.push(layout.box);
+  }
+  return placed.filter((p) => p !== null);
+}
+
+function containsRect(outer: Rect, r: Rect): boolean {
+  return contains(outer, r) && contains(outer, { x: r.x + r.w, y: r.y + r.h });
 }
 
 /** Comment bubbles of the callouts; drawn after every annotation so the text stays on top. */

@@ -35,6 +35,8 @@ interface Common {
 export interface Caption {
   num: number;
   comment: string;
+  /** Bubble moved by hand: its top-left corner relative to the badge center. Absent: placed automatically. */
+  bubble?: Pt;
 }
 
 export interface ArrowAnn extends Common {
@@ -79,6 +81,8 @@ export interface MarkAnn extends Common {
   /** End of the optional pointer line. */
   tail: Pt | null;
   comment: string;
+  /** As in Caption. */
+  bubble?: Pt;
 }
 
 export interface TextAnn extends Common {

@@ -19,6 +19,8 @@ export interface Callout {
   host?: "arrow" | "rect";
   /** Area the bubble keeps off when it can (the stroked frame of a captioned rectangle). */
   avoid?: Rect;
+  /** Bubble moved by hand: its top-left corner relative to `p`. */
+  bubble?: Pt;
 }
 
 export function calloutOf(a: Annotation): Callout | null {
@@ -26,14 +28,23 @@ export function calloutOf(a: Annotation): Callout | null {
     case "mark":
       return a;
     case "arrow":
-      return a.caption ? { id: a.id, color: a.color, num: a.caption.num, comment: a.caption.comment, p: a.a, tail: a.b, host: "arrow" } : null;
+      return a.caption
+        ? { id: a.id, color: a.color, num: a.caption.num, comment: a.caption.comment, p: a.a, tail: a.b, host: "arrow", bubble: a.caption.bubble }
+        : null;
     case "rect":
       return a.caption
-        ? { id: a.id, color: a.color, num: a.caption.num, comment: a.caption.comment, p: { x: a.r.x, y: a.r.y }, tail: null, host: "rect" }
+        ? { id: a.id, color: a.color, num: a.caption.num, comment: a.caption.comment, p: { x: a.r.x, y: a.r.y }, tail: null, host: "rect", bubble: a.caption.bubble }
         : null;
     default:
       return null;
   }
+}
+
+/** The callout of `a` with its bubble at `offset` from the badge center; other annotations come back as is. */
+export function withBubble(a: Annotation, offset: Pt): Annotation {
+  if (a.kind === "mark") return { ...a, bubble: offset };
+  if ((a.kind === "arrow" || a.kind === "rect") && a.caption) return { ...a, caption: { ...a.caption, bubble: offset } };
+  return a;
 }
 
 export function calloutsOf(list: readonly Annotation[]): Callout[] {

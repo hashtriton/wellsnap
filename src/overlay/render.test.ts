@@ -294,6 +294,47 @@ describe("layoutCallouts", () => {
     for (const p of placed) expect(overlaps(p.layout.box, markBounds(p.callout, env))).toBe(false);
   });
 
+  const rect = (id: number, num: number, r: Rect, comment: string): RectAnn => ({ kind: "rect", id, color: "#E5484D", size: 4, r, caption: { num, comment } });
+
+  it("keeps the caption of a rectangle off the neighbouring frame it touches", () => {
+    // Two table columns framed side by side, the selection close above them (a user's snapshot).
+    const first = rect(1, 1, { x: 300, y: 492, w: 78, h: 333 }, "Интенсивность искривления");
+    const second = rect(2, 2, { x: 378, y: 533, w: 100, h: 297 }, "Направление ствола");
+    for (const top of [485, 440, 300]) {
+      const crop = { x: 0, y: top, w: 580, h: 1150 - top };
+      const [a, b] = layoutCallouts([first, second], env, crop).map((p) => p.layout.box);
+      expect(overlaps(b, inflate(first.r, 2)), `top ${top}`).toBe(false);
+      expect(overlaps(a, inflate(second.r, 2)), `top ${top}`).toBe(false);
+      // Not even touching: a gap stays between the bubbles.
+      expect(overlaps(inflate(a, 2.9), b), `top ${top}`).toBe(false);
+    }
+  });
+
+  it("puts a moved bubble where the user left it, and the others make way", () => {
+    const a = mark(1, 1, 300, 300, "first");
+    // The second bubble moved by hand onto the spot the first one takes on its own, right of its badge.
+    const auto = bubbleLayout(a, env, crop)!.box;
+    const b: MarkAnn = { ...mark(2, 2, 700, 300, "second"), bubble: { x: auto.x - 700, y: auto.y - 300 } };
+    const [pa, pb] = layoutCallouts([a, b], env, crop);
+    expect(pb.layout.box).toMatchObject({ x: auto.x, y: auto.y });
+    expect(overlaps(pa.layout.box, pb.layout.box)).toBe(false);
+  });
+
+  it("keeps a moved bubble inside the crop", () => {
+    const m: MarkAnn = { ...mark(1, 1, 300, 300, "far"), bubble: { x: 5000, y: -5000 } };
+    const [p] = layoutCallouts([m], env, crop);
+    expect(p.layout.box.x + p.layout.box.w).toBeCloseTo(crop.w - 4);
+    expect(p.layout.box.y).toBe(4);
+  });
+
+  it("lets a mark inside a captioned frame keep its text inside it", () => {
+    const frame = rect(1, 1, { x: 100, y: 100, w: 800, h: 600 }, "frame");
+    const inside = mark(2, 2, 500, 400, "inside");
+    const placed = layoutCallouts([frame, inside], env, crop);
+    const box = placed.find((p) => p.callout.id === 2)!.layout.box;
+    expect(overlaps(box, frame.r) && box.x >= 100 && box.x + box.w <= 900).toBe(true);
+  });
+
   it("has no bubble for a callout whose badge is outside the crop", () => {
     const placed = layoutCallouts([mark(1, 1, -20, 50, "outside"), mark(2, 2, 100, 100, "inside")], env, crop);
     expect(placed.map((p) => p.callout.id)).toEqual([2]);

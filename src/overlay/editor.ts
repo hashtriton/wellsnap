@@ -27,7 +27,7 @@ import {
 } from "./geometry";
 import { History } from "./history";
 import { arrowDelta, escapeStep, formatChord, isRepeatable, matchHabit, matchKey, shortcutOf, type CommandId, type HabitId } from "./keys";
-import { calloutOf, calloutsOf, MAX_MARKS, markInCrop, markLabel, nextMarkNum, removeAnnotation, setCaption } from "./marks";
+import { calloutOf, calloutsOf, MAX_MARKS, markInCrop, markLabel, nextMarkNum, removeAnnotation, setCaption, withBubble } from "./marks";
 import { computeMosaic, mosaicCellSize, type PixelSource } from "./mosaic";
 import { defaultPrefs, parsePrefs, serializePrefs, SIZED_TOOLS, stepWidth, type ToolPrefs } from "./prefs";
 import {
@@ -35,6 +35,7 @@ import {
   drawAnnotation,
   drawAnnotations,
   drawCallouts,
+  layoutCallouts,
   markBounds,
   markerWidth,
   textLayout,
@@ -161,7 +162,8 @@ type Drag =
   | { kind: "moveSel"; start: Pt; orig: Rect }
   | { kind: "resizeSel"; start: Pt; orig: Rect; handle: Handle }
   | { kind: "draw"; start: Pt; ann: Annotation }
-  | { kind: "moveAnn"; start: Pt; orig: Annotation; cur: Annotation; moved: boolean }
+  /** `bubble`: the drag moves only the comment bubble, which started at this offset from the badge center. */
+  | { kind: "moveAnn"; start: Pt; orig: Annotation; cur: Annotation; moved: boolean; bubble: Pt | null }
   | { kind: "editAnn"; start: Pt; orig: Annotation; cur: Annotation; handle: AnnHandle; moved: boolean };
 
 /**
@@ -995,10 +997,12 @@ export class Editor {
         this.drag = { kind: "editAnn", start: p, orig: current, cur: current, handle: annHandle, moved: false };
         return true;
       }
+      // Bubbles are drawn above every annotation, the selection handles above the bubbles.
+      if (!selHandle && this.grabBubble(p, true)) return true;
       const hit = topHit(list, p, env, tol / 2);
       if (hit) {
         this.selectedId = hit.id;
-        this.drag = { kind: "moveAnn", start: p, orig: hit, cur: hit, moved: false };
+        this.drag = { kind: "moveAnn", start: p, orig: hit, cur: hit, moved: false, bubble: null };
         return true;
       }
       this.selectedId = null;
@@ -1018,6 +1022,7 @@ export class Editor {
       this.drag = { kind: "resizeSel", start: p, orig: sel, handle: selHandle };
       return true;
     }
+    if (this.grabBubble(p, false)) return true;
     if (!contains(sel, p) && list.length === 0) return this.startCreate(p, sel);
 
     const tool = this.tool;
@@ -1026,7 +1031,7 @@ export class Editor {
       const hit = topCallout(list, p, env, tol / 2);
       if (hit) {
         this.selectedId = hit.id;
-        this.drag = { kind: "moveAnn", start: p, orig: hit, cur: hit, moved: false };
+        this.drag = { kind: "moveAnn", start: p, orig: hit, cur: hit, moved: false, bubble: null };
         return true;
       }
       // A callout outside the selection would be in neither the image nor the text.
@@ -1044,6 +1049,42 @@ export class Editor {
     }
     this.drag = { kind: "draw", start: p, ann: this.newAnnotation(tool, p) };
     return true;
+  }
+
+  /** Starts moving the comment bubble under `p`; the Select tool also selects the annotation it belongs to. */
+  private grabBubble(p: Pt, select: boolean): boolean {
+    const hit = this.bubbleAt(p);
+    if (!hit) return false;
+    if (select) this.selectedId = hit.ann.id;
+    this.drag = { kind: "moveAnn", start: p, orig: hit.ann, cur: hit.ann, moved: false, bubble: hit.offset };
+    return true;
+  }
+
+  /** Annotation whose comment bubble is under `p`, topmost first, with the bubble's offset from the badge center. */
+  private bubbleAt(p: Pt): { ann: Annotation; offset: Pt } | null {
+    const sel = this.selection;
+    if (!sel || this.phase !== "ready") return null;
+    const hidden = this.input?.kind === "mark" ? this.input.id : null;
+    const placed = layoutCallouts(this.history.current, this.envFor(this.screenLetter()), sel);
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const { callout, layout } = placed[i];
+      const ann = callout.id === hidden ? null : this.find(callout.id);
+      if (ann && contains(layout.box, p)) return { ann, offset: { x: layout.box.x - callout.p.x, y: layout.box.y - callout.p.y } };
+    }
+    return null;
+  }
+
+  /**
+   * `a` with its bubble offset as drawn: an offset dragged past the edge of the crop would send the bubble
+   * there once the selection grows.
+   */
+  private bubbleAsDrawn(a: Annotation): Annotation {
+    const sel = this.selection;
+    const c = calloutOf(a);
+    if (!sel || !c) return a;
+    const list = this.history.current.map((b) => (b.id === a.id ? a : b));
+    const placed = layoutCallouts(list, this.envFor(this.screenLetter()), sel).find((x) => x.callout.id === a.id);
+    return placed ? withBubble(a, { x: placed.layout.box.x - c.p.x, y: placed.layout.box.y - c.p.y }) : a;
   }
 
   private startCreate(p: Pt, prev: Rect | null): boolean {
@@ -1129,7 +1170,7 @@ export class Editor {
         // A click that selects must not nudge the object by a pixel of hand jitter.
         if (!d.moved && Math.hypot(dx, dy) < CLICK_SLOP_CSS * this.scale) break;
         d.moved = true;
-        d.cur = translate(d.orig, whole(dx), whole(dy));
+        d.cur = d.bubble ? withBubble(d.orig, { x: d.bubble.x + dx, y: d.bubble.y + dy }) : translate(d.orig, whole(dx), whole(dy));
         break;
       case "editAnn":
         // Same slop as a move: a click on a handle (the caption badge of a selected shape is one) is no edit.
@@ -1205,7 +1246,7 @@ export class Editor {
         break;
       case "moveAnn":
       case "editAnn":
-        if (d.cur !== d.orig && this.isValid(d.cur)) this.replaceAnnotation(d.cur);
+        if (d.cur !== d.orig && this.isValid(d.cur)) this.replaceAnnotation(d.kind === "moveAnn" && d.bubble ? this.bubbleAsDrawn(d.cur) : d.cur);
         break;
     }
     if (d.kind === "create" || d.kind === "moveSel" || d.kind === "resizeSel" || d.kind === "moveAnn" || d.kind === "editAnn") this.noticeMarksOut();
@@ -1241,6 +1282,14 @@ export class Editor {
   private onDoubleClick = (e: MouseEvent): void => {
     if (this.phase !== "ready" || this.busy || !["select", "mark", "arrow", "rect"].includes(this.tool)) return;
     const p = this.toPhys(e);
+    // A double-click on a comment bubble edits that comment, whatever lies under it.
+    const bubble = this.bubbleAt(p);
+    if (bubble) {
+      this.openCalloutInput(bubble.ann.id, "edit");
+      this.emit();
+      this.requestRender();
+      return;
+    }
     const env = this.envFor(this.screenLetter());
     const tol = (HIT_CSS * this.scale) / 2;
     // The shape tools caption shapes; marks and text open with the Select and Callout tools, as before.
@@ -1289,11 +1338,10 @@ export class Editor {
     const env = this.envFor(this.screenLetter());
     const list = this.history.current;
     const current = this.selectedAnn();
-    if (this.tool === "select") {
-      if (current && hitAnnotationHandle(current, p, tol, env)) return "pointer";
-      if (topHit(list, p, env, tol / 2)) return "move";
-    }
+    if (this.tool === "select" && current && hitAnnotationHandle(current, p, tol, env)) return "pointer";
     const h = hitHandle(sel, p, tol);
+    if (!h && this.bubbleAt(p)) return "move";
+    if (this.tool === "select" && topHit(list, p, env, tol / 2)) return "move";
     if (h) return cursorForHandle(h);
     if (this.tool === "select") return contains(sel, p) ? "move" : list.length ? "default" : "crosshair";
     if (this.tool === "mark" && topCallout(list, p, env, tol / 2)) return "move";

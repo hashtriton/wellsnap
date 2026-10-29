@@ -235,6 +235,55 @@ describe("key auto-repeat", () => {
   });
 });
 
+describe("comment bubbles", () => {
+  const hover = (x: number, y: number) => {
+    canvas.events.fire("pointermove", pointer(x, y));
+    return canvas.style.cursor;
+  };
+
+  /** A mark at (150, 150) commented "hello": its bubble is right of the badge, across (195, 150). */
+  function commentedMark(): void {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([100, 100], [400, 400]);
+    editor.setTool("mark");
+    click(150, 150);
+    editor.setInputValue("hello");
+    editor.submitInput();
+    expect(editor.getView()).toMatchObject({ input: null, markCount: 1 });
+  }
+
+  it("move with the mouse in one undo step, and no mark is added", () => {
+    commentedMark();
+    expect(hover(195, 150)).toBe("move");
+    drag([195, 150], [195, 250]);
+    expect(editor.getView().markCount).toBe(1);
+    expect(hover(195, 150)).toBe("crosshair");
+    expect(hover(195, 250)).toBe("move");
+    editor.undo();
+    expect(hover(195, 150)).toBe("move");
+    expect(hover(195, 250)).toBe("crosshair");
+    expect(editor.getView().markCount).toBe(1);
+  });
+
+  it("stay where they were seen after being dragged past the selection", () => {
+    commentedMark();
+    drag([195, 150], [195, 590]);
+    // Held at the bottom of the selection (400 - 4).
+    expect(hover(195, 380)).toBe("move");
+    // A taller selection does not let it fly on to where the pointer was let go.
+    drag([250, 400], [250, 595]);
+    expect(hover(195, 380)).toBe("move");
+    expect(hover(195, 575)).toBe("crosshair");
+  });
+
+  it("open their comment on a double-click", () => {
+    commentedMark();
+    dblclick(195, 150);
+    expect(editor.getView().input).toMatchObject({ kind: "mark", value: "hello" });
+    expect(editor.getView().markCount).toBe(1);
+  });
+});
+
 describe("toolbar corner", () => {
   it("follows the corner where the selection drag ended", () => {
     editor.onFrame(payload, new Uint8ClampedArray(0));

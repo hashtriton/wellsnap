@@ -295,6 +295,36 @@ describe("typed callout numbers", () => {
     expect(labelOfSelected()).toBe("7");
   });
 
+  it("leave no empty undo step when typed back to the number it had", () => {
+    placeMark(150, 150);
+    click(150, 150);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    digit(1);
+    digit(2);
+    now.mockReturnValue(3000);
+    digit(1);
+    digit(2);
+    now.mockRestore();
+    expect(labelOfSelected()).toBe("12");
+    editor.undo();
+    click(150, 150);
+    expect(labelOfSelected()).toBe("1");
+  });
+
+  it("are ignored while the callout is dragged", () => {
+    placeMark(150, 150);
+    click(150, 150);
+    canvas.events.fire("pointerdown", pointer(150, 150));
+    canvas.events.fire("pointermove", pointer(170, 170));
+    digit(5);
+    canvas.events.fire("pointerup", pointer(170, 170));
+    click(170, 170);
+    expect(labelOfSelected()).toBe("1");
+    editor.undo();
+    click(150, 150);
+    expect(labelOfSelected()).toBe("1");
+  });
+
   it("do nothing without a selected callout", () => {
     placeMark(150, 150);
     digit(5);
@@ -539,6 +569,16 @@ describe("captions after drawing", () => {
     captionsOff("arrow");
     drag([150, 150], [250, 250]);
     expect(editor.getView()).toMatchObject({ input: null, markCount: 0, canUndo: true });
+  });
+
+  it("let the press that closes a caption start the next shape, even where its bubble then appears", () => {
+    selectArea();
+    captionsOn("arrow");
+    drag([150, 150], [250, 250]);
+    editor.setInputValue("first");
+    // The bubble of "first" goes below its badge, across (150, 185), once the input closes.
+    drag([150, 185], [260, 185]);
+    expect(editor.getView().input).toMatchObject({ caption: true, label: "2" });
   });
 
   it("put the shape and its text in one undo step and send the text as a mark", async () => {

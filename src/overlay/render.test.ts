@@ -327,6 +327,14 @@ describe("layoutCallouts", () => {
     expect(p.layout.box.y).toBe(4);
   });
 
+  it("steps a moved bubble off its own badge when the crop edge pushes it there", () => {
+    // Moved right of its badge, then the badge came close to the right edge: clamped, it would cover the number.
+    const m: MarkAnn = { ...mark(1, 1, 980, 300, "moved"), bubble: { x: 20, y: -14 } };
+    const [p] = layoutCallouts([m], env, crop);
+    expect(overlaps(p.layout.box, markBounds(m, env))).toBe(false);
+    expect(p.layout.box.x + p.layout.box.w).toBeLessThanOrEqual(crop.w - 4 + 0.01);
+  });
+
   it("lets a mark inside a captioned frame keep its text inside it", () => {
     const frame = rect(1, 1, { x: 100, y: 100, w: 800, h: 600 }, "frame");
     const inside = mark(2, 2, 500, 400, "inside");

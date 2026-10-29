@@ -252,8 +252,11 @@ export class Editor {
   private lastNudge: { id: number; at: number; state: readonly Annotation[] } | null = null;
   /** Number the user placed or typed last: the next callout continues from it. */
   private lastNum: number | null = null;
-  /** The digit just typed on a callout, for a second one to join it; `pushed`: it made an undo step. */
-  private typedNum: { id: number; at: number; value: number; pushed: boolean; state: readonly Annotation[] } | null = null;
+  /**
+   * The digit just typed on a callout, for a second one to join it; `from`: the number before it, `pushed`: it
+   * made an undo step.
+   */
+  private typedNum: { id: number; at: number; value: number; from: number; pushed: boolean; state: readonly Annotation[] } | null = null;
   private busy: FinishAction | null = null;
   private notice: Notice | null = null;
   private armed = false;
@@ -982,14 +985,17 @@ export class Editor {
     // A click outside an open input commits it. A caption opened by drawing lets the press through, so the
     // next shape starts at once (drag, type, drag); every other input only commits.
     const through = !this.input || (this.input.origin === "draw" && isCaptionHost(this.find(this.input.id)));
+    // The bubble of that caption appears only now: the press was aimed past it, at the next shape.
+    const closing = this.input?.kind === "mark" ? this.input.id : null;
     if (this.input) this.closeInput();
-    if (through && this.beginDrag(p)) this.canvas.setPointerCapture(e.pointerId);
+    if (through && this.beginDrag(p, closing)) this.canvas.setPointerCapture(e.pointerId);
     this.updateHover(p);
     this.emit();
     this.requestRender();
   };
 
-  private beginDrag(p: Pt): boolean {
+  /** `unseen`: a callout whose bubble the user has not seen yet, which a press must not grab. */
+  private beginDrag(p: Pt, unseen: number | null): boolean {
     const sel = this.selection;
     if (this.phase === "idle" || !sel) return this.startCreate(p, null);
     const s = this.scale;
@@ -1006,7 +1012,7 @@ export class Editor {
         return true;
       }
       // Bubbles are drawn above every annotation, the selection handles above the bubbles.
-      if (!selHandle && this.grabBubble(p, true)) return true;
+      if (!selHandle && this.grabBubble(p, true, unseen)) return true;
       const hit = topHit(list, p, env, tol / 2);
       if (hit) {
         this.selectedId = hit.id;
@@ -1030,7 +1036,7 @@ export class Editor {
       this.drag = { kind: "resizeSel", start: p, orig: sel, handle: selHandle };
       return true;
     }
-    if (this.grabBubble(p, false)) return true;
+    if (this.grabBubble(p, false, unseen)) return true;
     if (!contains(sel, p) && list.length === 0) return this.startCreate(p, sel);
 
     const tool = this.tool;
@@ -1060,19 +1066,22 @@ export class Editor {
   }
 
   /** Starts moving the comment bubble under `p`; the Select tool also selects the annotation it belongs to. */
-  private grabBubble(p: Pt, select: boolean): boolean {
-    const hit = this.bubbleAt(p);
+  private grabBubble(p: Pt, select: boolean, unseen: number | null): boolean {
+    const hit = this.bubbleAt(p, unseen);
     if (!hit) return false;
     if (select) this.selectedId = hit.ann.id;
     this.drag = { kind: "moveAnn", start: p, orig: hit.ann, cur: hit.ann, moved: false, bubble: hit.offset };
     return true;
   }
 
-  /** Annotation whose comment bubble is under `p`, topmost first, with the bubble's offset from the badge center. */
-  private bubbleAt(p: Pt): { ann: Annotation; offset: Pt } | null {
+  /**
+   * Annotation whose comment bubble is under `p`, topmost first, with the bubble's offset from the badge center.
+   * The bubble of an open input is not drawn, nor is `unseen`, so neither counts.
+   */
+  private bubbleAt(p: Pt, unseen: number | null = null): { ann: Annotation; offset: Pt } | null {
     const sel = this.selection;
     if (!sel || this.phase !== "ready") return null;
-    const hidden = this.input?.kind === "mark" ? this.input.id : null;
+    const hidden = this.input?.kind === "mark" ? this.input.id : unseen;
     const placed = layoutCallouts(this.history.current, this.envFor(this.screenLetter()), sel);
     for (let i = placed.length - 1; i >= 0; i--) {
       const { callout, layout } = placed[i];
@@ -1451,14 +1460,21 @@ export class Editor {
     const num = more ? t.value * 10 + digit : digit;
     // A lone 0 is no number; "1", "0" still gives 10.
     if (num < 1) return;
+    const from = more ? t.from : c.num;
     let pushed = more && t.pushed;
     if (num !== c.num) {
-      const list = setNumber(this.history.current, sel.id, num);
-      if (pushed) this.history.replace(list);
-      else this.history.push(list);
-      pushed = true;
+      if (!pushed) {
+        this.history.push(setNumber(this.history.current, sel.id, num));
+        pushed = true;
+      } else if (num === from) {
+        // Typed back to the number it had: no step is left that changes nothing.
+        this.history.discard();
+        pushed = false;
+      } else {
+        this.history.replace(setNumber(this.history.current, sel.id, num));
+      }
     }
-    this.typedNum = { id: sel.id, at: now, value: num, pushed, state: this.history.current };
+    this.typedNum = { id: sel.id, at: now, value: num, from, pushed, state: this.history.current };
     this.lastNum = num;
   }
 
@@ -1869,7 +1885,8 @@ export class Editor {
         this.loupeOn = !this.loupeOn;
         break;
       case "renumber":
-        if (!ready) return;
+        // Not mid-drag: the drop would put the number from before the drag back.
+        if (!ready || this.drag) return;
         this.typeNumber(Number(code.slice(-1)));
         break;
       case "commentPlacement":

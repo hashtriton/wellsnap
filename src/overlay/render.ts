@@ -403,8 +403,19 @@ export function bubbleLayout(
   const layout = (box: Rect, side: Side): BubbleLayout => ({ box, side, lines, font, padX, padY, lineH, radius: 6 * s });
 
   if (a.bubble) {
-    // Where the user put it, kept inside the crop; it dodges nothing.
-    const box = { x: slideX(cx + a.bubble.x), y: slideY(cy + a.bubble.y), w, h };
+    // Where the user put it, kept inside the crop; it dodges nothing but its own badge, which the crop edge
+    // can push it onto (and the number would be lost under it): then it steps off on the nearest side.
+    let box = { x: slideX(cx + a.bubble.x), y: slideY(cy + a.bubble.y), w, h };
+    if (intersects(box, badge)) {
+      const off = [
+        { ...box, x: slideX(badge.x - gap - w) },
+        { ...box, x: slideX(badge.x + badge.w + gap) },
+        { ...box, y: slideY(badge.y - gap - h) },
+        { ...box, y: slideY(badge.y + badge.h + gap) },
+      ].filter((b) => !intersects(b, badge));
+      const moved = (b: Rect) => Math.abs(b.x - box.x) + Math.abs(b.y - box.y);
+      if (off.length) box = off.reduce((best, b) => (moved(b) < moved(best) ? b : best));
+    }
     const dx = (box.x + w / 2 - cx) / (w + badge.w);
     const dy = (box.y + h / 2 - cy) / (h + badge.h);
     return layout(box, Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "right" : "left") : dy >= 0 ? "below" : "above");

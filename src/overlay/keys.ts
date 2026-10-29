@@ -30,6 +30,7 @@ export type CommandId =
   | "commentPlacement"
   | "captions"
   | "pickColor"
+  | "renumber"
   | "help"
   | "escape";
 
@@ -48,6 +49,7 @@ export interface Binding {
 
 const ARROW_CODES = ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"];
 const arrows = (m: Omit<Chord, "code">): Chord[] => ARROW_CODES.map((code) => ({ code, ...m }));
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 export const KEYMAP: readonly Binding[] = [
   { id: "tool.select", chords: [{ code: "KeyV" }] },
@@ -78,6 +80,7 @@ export const KEYMAP: readonly Binding[] = [
   { id: "commentPlacement", chords: [{ code: "KeyL" }] },
   { id: "captions", chords: [{ code: "KeyT", shift: true }] },
   { id: "pickColor", chords: [{ code: "KeyC" }] },
+  { id: "renumber", chords: [...DIGITS.map((d) => ({ code: `Digit${d}` })), ...DIGITS.map((d) => ({ code: `Numpad${d}` }))] },
   { id: "help", chords: [{ code: "F1" }] },
   { id: "escape", chords: [{ code: "Escape" }] },
 ];
@@ -242,6 +245,7 @@ export function formatBinding(b: Binding, mac: boolean): string[] {
   }
   // Delete and Backspace do the same; show the key the platform calls "delete".
   if (b.id === "delete") return [keyName(mac ? "Backspace" : "Delete", mac)];
+  if (b.id === "renumber") return ["0…9"];
   return chords.map((c) => formatChord(c, mac));
 }
 

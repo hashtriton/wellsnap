@@ -167,7 +167,7 @@ const HELP_GROUPS: { key: string; ids: CommandId[] }[] = [
   { key: "actions", ids: ["primary", "copy", "save", "pin", "addToSet", "commentPlacement", "captions", "escape"] },
   {
     key: "editing",
-    ids: ["undo", "redo", "delete", "selectAll", "move", "moveFast", "resize", "resizeFast", "widthDown", "widthUp", "loupe", "pickColor", "help"],
+    ids: ["undo", "redo", "delete", "selectAll", "move", "moveFast", "resize", "resizeFast", "widthDown", "widthUp", "renumber", "loupe", "pickColor", "help"],
   },
 ];
 

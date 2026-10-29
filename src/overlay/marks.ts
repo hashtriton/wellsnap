@@ -56,47 +56,45 @@ export function calloutsOf(list: readonly Annotation[]): Callout[] {
   return out;
 }
 
-/** Next number is derived from the callouts present (not a counter), so undo and delete stay consistent. */
-export function nextMarkNum(list: readonly Annotation[]): number {
-  let max = 0;
-  for (const c of calloutsOf(list)) if (c.num > max) max = c.num;
-  return max + 1;
+/**
+ * Number for a new callout: one after `last` (the number the user placed or typed last) while a callout
+ * still has it, else one after the highest. Derived from the callouts present, so undo and delete stay
+ * consistent. Numbers may repeat (the user sets them), and stop at MAX_MARKS.
+ */
+export function nextMarkNum(list: readonly Annotation[], last: number | null = null): number {
+  const nums = calloutsOf(list).map((c) => c.num);
+  const from = last !== null && nums.includes(last) ? last : Math.max(0, ...nums);
+  return Math.min(from + 1, MAX_MARKS);
 }
 
-/** Shifts every callout number above `num` down by one, so A1..An has no gaps. */
-function closeGap(list: readonly Annotation[], num: number): Annotation[] {
+/** Removes an annotation. The other callouts keep their numbers: the user may have typed them. */
+export function removeAnnotation(list: readonly Annotation[], id: number): Annotation[] {
+  return list.filter((a) => a.id !== id);
+}
+
+/** Sets the number of the callout `id`; other annotations come back unchanged. */
+export function setNumber(list: readonly Annotation[], id: number, num: number): Annotation[] {
   return list.map((a) => {
-    if (a.kind === "mark") return a.num > num ? { ...a, num: a.num - 1 } : a;
-    if ((a.kind === "arrow" || a.kind === "rect") && a.caption && a.caption.num > num) return { ...a, caption: { ...a.caption, num: a.caption.num - 1 } };
+    if (a.id !== id) return a;
+    if (a.kind === "mark") return { ...a, num };
+    if ((a.kind === "arrow" || a.kind === "rect") && a.caption) return { ...a, caption: { ...a.caption, num } };
     return a;
   });
 }
 
-/** Removes an annotation; removing a callout renumbers the higher ones. */
-export function removeAnnotation(list: readonly Annotation[], id: number): Annotation[] {
-  const target = list.find((a) => a.id === id);
-  if (!target) return [...list];
-  const rest = list.filter((a) => a.id !== id);
-  const c = calloutOf(target);
-  return c ? closeGap(rest, c.num) : rest;
-}
-
 /**
- * Sets the caption text of the arrow or rectangle `id`: adds a caption with the next number, updates its
- * text, or (null) removes it and renumbers the higher callouts. Other annotations come back unchanged.
+ * Sets the caption text of the arrow or rectangle `id`: adds a caption numbered `num`, updates its text, or
+ * (null) removes it. Other annotations come back unchanged.
  */
-export function setCaption(list: readonly Annotation[], id: number, comment: string | null): Annotation[] {
+export function setCaption(list: readonly Annotation[], id: number, comment: string | null, num = nextMarkNum(list)): Annotation[] {
   const target = list.find((a) => a.id === id);
   if (!target || (target.kind !== "arrow" && target.kind !== "rect")) return [...list];
   if (comment === null) {
     if (!target.caption) return [...list];
-    const { caption, ...plain } = target;
-    return closeGap(
-      list.map((a) => (a.id === id ? plain : a)),
-      caption.num,
-    );
+    const { caption: _, ...plain } = target;
+    return list.map((a) => (a.id === id ? plain : a));
   }
-  const caption = target.caption ? { ...target.caption, comment } : { num: nextMarkNum(list), comment };
+  const caption = target.caption ? { ...target.caption, comment } : { num, comment };
   return list.map((a) => (a.id === id ? { ...target, caption } : a));
 }
 

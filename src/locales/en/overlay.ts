@@ -127,6 +127,7 @@ export const overlay: typeof ru = {
       commentPlacement: "Callout text: on the image or separate",
       captions: "Caption after an arrow or rectangle: on or off",
       pickColor: "Copy the pixel color (before selecting)",
+      renumber: "Callout number: select the callout, type 1 to 99",
       help: "This list",
       escape: "Step back, then discard the screenshot",
     },

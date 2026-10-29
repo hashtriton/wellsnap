@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calloutOf, calloutsOf, contrastText, markInCrop, markLabel, marksMeta, nextMarkNum, removeAnnotation, setCaption } from "./marks";
+import { calloutOf, calloutsOf, contrastText, markInCrop, markLabel, marksMeta, nextMarkNum, removeAnnotation, setCaption, setNumber } from "./marks";
 import type { Annotation, MarkAnn, RectAnn } from "./types";
 
 const mark = (id: number, num: number, comment = "", p = { x: 0, y: 0 }): MarkAnn => ({
@@ -20,16 +20,27 @@ describe("mark numbering", () => {
     expect(nextMarkNum([mark(1, 1), mark(2, 4), rect(3)])).toBe(5);
   });
 
-  it("renumbers higher marks down by one on delete", () => {
-    const list = [mark(1, 1), rect(2), mark(3, 2), mark(4, 3)];
-    const next = removeAnnotation(list, 3);
-    expect(next.map((a) => (a.kind === "mark" ? a.num : "r"))).toEqual([1, "r", 2]);
-    expect(nextMarkNum(next)).toBe(3);
+  it("keeps the other numbers on delete: the user may have typed them", () => {
+    const list = [mark(1, 9), rect(2), mark(3, 10), mark(4, 11)];
+    const next = removeAnnotation(list, 1);
+    expect(next.map((a) => (a.kind === "mark" ? a.num : "r"))).toEqual(["r", 10, 11]);
+    expect(nextMarkNum(next)).toBe(12);
   });
 
-  it("does not renumber when a non-mark is deleted", () => {
+  it("continues from the number placed or typed last while a callout has it", () => {
+    const list = [mark(1, 1), mark(2, 9), mark(3, 4)];
+    expect(nextMarkNum(list, 9)).toBe(10);
+    expect(nextMarkNum(list, 1)).toBe(2);
+    // Nothing has 7 any more (undone, deleted): one after the highest.
+    expect(nextMarkNum(list, 7)).toBe(10);
+    expect(nextMarkNum([mark(1, 99)], 99)).toBe(99);
+  });
+
+  it("sets the number of a mark or a caption", () => {
     const list = [mark(1, 1), rect(2), mark(3, 2)];
-    expect(removeAnnotation(list, 2).map((a) => (a.kind === "mark" ? a.num : 0))).toEqual([1, 2]);
+    expect(setNumber(list, 3, 9).map((a) => (a.kind === "mark" ? a.num : "r"))).toEqual([1, "r", 9]);
+    expect(setNumber(list, 2, 9)).toEqual(list);
+    expect((list[2] as MarkAnn).num).toBe(2);
   });
 
   it("does not mutate the input list", () => {
@@ -94,17 +105,18 @@ describe("captions", () => {
     expect(nextMarkNum([mark(1, 1), frame(2, 2), arrow(3)])).toBe(3);
   });
 
-  it("renumbers marks and captions together on delete", () => {
+  it("keeps the numbers of marks and captions on delete", () => {
     const list = [mark(1, 1), arrow(2, 2), frame(3, 3), mark(4, 4)];
-    expect(nums(removeAnnotation(list, 1))).toEqual([
-      [2, 1],
-      [3, 2],
-      [4, 3],
-    ]);
     expect(nums(removeAnnotation(list, 2))).toEqual([
       [1, 1],
-      [3, 2],
-      [4, 3],
+      [3, 3],
+      [4, 4],
+    ]);
+    expect(nums(setNumber(list, 3, 1))).toEqual([
+      [1, 1],
+      [2, 2],
+      [3, 1],
+      [4, 4],
     ]);
   });
 
@@ -123,8 +135,9 @@ describe("captions", () => {
     expect("caption" in removed[2]).toBe(false);
     expect(nums(removed)).toEqual([
       [1, 1],
-      [2, 2],
+      [2, 3],
     ]);
+    expect(nums(setCaption(list, 2, "", 7))).toContainEqual([2, 7]);
     // A mark or an unknown id leaves the list as it is.
     expect(setCaption(list, 1, "x")).toEqual(list);
     expect(setCaption(list, 9, "x")).toEqual(list);

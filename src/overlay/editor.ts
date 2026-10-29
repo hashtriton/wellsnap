@@ -27,7 +27,7 @@ import {
 } from "./geometry";
 import { History } from "./history";
 import { arrowDelta, escapeStep, formatChord, isRepeatable, matchHabit, matchKey, shortcutOf, type CommandId, type HabitId } from "./keys";
-import { calloutOf, calloutsOf, MAX_MARKS, markInCrop, markLabel, nextMarkNum, removeAnnotation, setCaption, withBubble } from "./marks";
+import { calloutOf, calloutsOf, MAX_MARKS, markInCrop, markLabel, nextMarkNum, removeAnnotation, setCaption, setNumber, withBubble } from "./marks";
 import { computeMosaic, mosaicCellSize, type PixelSource } from "./mosaic";
 import { defaultPrefs, parsePrefs, serializePrefs, SIZED_TOOLS, stepWidth, type ToolPrefs } from "./prefs";
 import {
@@ -59,6 +59,8 @@ const SIZE_LABEL_MS = 1500;
 const ARM_MS = 2000;
 const PREFS_SAVE_MS = 500;
 const NUDGE_MERGE_MS = 1000;
+/** A second digit typed within this time makes a two-digit callout number. */
+const NUMBER_TYPE_MS = 1000;
 const TAIL_MIN_CSS = 18;
 const WHEEL_STEP = 50;
 const BRUSH_PREVIEW_MS = 700;
@@ -248,6 +250,10 @@ export class Editor {
   private brushUntil = 0;
   private wheelAcc = 0;
   private lastNudge: { id: number; at: number; state: readonly Annotation[] } | null = null;
+  /** Number the user placed or typed last: the next callout continues from it. */
+  private lastNum: number | null = null;
+  /** The digit just typed on a callout, for a second one to join it; `pushed`: it made an undo step. */
+  private typedNum: { id: number; at: number; value: number; pushed: boolean; state: readonly Annotation[] } | null = null;
   private busy: FinishAction | null = null;
   private notice: Notice | null = null;
   private armed = false;
@@ -520,6 +526,8 @@ export class Editor {
     this.sizeLabelUntil = 0;
     this.brushUntil = 0;
     this.lastNudge = null;
+    this.lastNum = null;
+    this.typedNum = null;
     this.busy = null;
     this.notice = null;
     this.armed = false;
@@ -1110,7 +1118,7 @@ export class Editor {
       case "blur":
         return { kind: "blur", id, color, mode: this.prefs.blurMode, r: { x: Math.round(p.x), y: Math.round(p.y), w: 0, h: 0 } };
       case "mark":
-        return { kind: "mark", id, color, num: nextMarkNum(this.history.current), p, tail: null, comment: "" };
+        return { kind: "mark", id, color, num: this.takeNum(this.history.current), p, tail: null, comment: "" };
       case "text":
         return { kind: "text", id, color, size, p, text: "", plate: this.prefs.textPlate };
     }
@@ -1370,7 +1378,7 @@ export class Editor {
     const list = this.history.current;
     if (isCaptionHost(a) && this.prefs.captions[a.kind] && this.captionFits(a) && this.captionAllowed(a)) {
       // One step for the shape and its caption: one Undo removes both.
-      this.history.push([...list, { ...a, caption: { num: nextMarkNum(list), comment: "" } }]);
+      this.history.push([...list, { ...a, caption: { num: this.takeNum(list), comment: "" } }]);
       this.noteDrawn(a.id, list);
       this.openCalloutInput(a.id, "draw");
       return;
@@ -1423,6 +1431,37 @@ export class Editor {
     return true;
   }
 
+  /** Number for a callout being added; the next one continues from it. */
+  private takeNum(list: readonly Annotation[]): number {
+    this.lastNum = nextMarkNum(list, this.lastNum);
+    return this.lastNum;
+  }
+
+  /**
+   * A digit typed on the selected callout sets its number; a second one within NUMBER_TYPE_MS makes it
+   * two-digit ("1", "2": 12) in the same undo step. The next new callout continues from that number.
+   */
+  private typeNumber(digit: number): void {
+    const sel = this.selectedAnn();
+    const c = sel && calloutOf(sel);
+    if (!sel || !c) return;
+    const now = performance.now();
+    const t = this.typedNum;
+    const more = !!t && t.id === sel.id && t.value < 10 && now - t.at < NUMBER_TYPE_MS && t.state === this.history.current;
+    const num = more ? t.value * 10 + digit : digit;
+    // A lone 0 is no number; "1", "0" still gives 10.
+    if (num < 1) return;
+    let pushed = more && t.pushed;
+    if (num !== c.num) {
+      const list = setNumber(this.history.current, sel.id, num);
+      if (pushed) this.history.replace(list);
+      else this.history.push(list);
+      pushed = true;
+    }
+    this.typedNum = { id: sel.id, at: now, value: num, pushed, state: this.history.current };
+    this.lastNum = num;
+  }
+
   private noticeMarksLimit(): void {
     this.showNotice({ key: "overlay.notices.marksLimit", params: { count: MAX_MARKS }, tone: "error" }, 3000);
   }
@@ -1430,7 +1469,7 @@ export class Editor {
   /** Double-click on a plain arrow or rectangle: a caption with the next number, left without a trace if it stays empty. */
   private addCaption(a: CaptionHost): void {
     if (!this.captionAllowed(a)) return;
-    this.history.push(setCaption(this.history.current, a.id, ""));
+    this.history.push(setCaption(this.history.current, a.id, "", this.takeNum(this.history.current)));
     this.openCalloutInput(a.id, "add");
   }
 
@@ -1828,6 +1867,10 @@ export class Editor {
         return;
       case "loupe":
         this.loupeOn = !this.loupeOn;
+        break;
+      case "renumber":
+        if (!ready) return;
+        this.typeNumber(Number(code.slice(-1)));
         break;
       case "commentPlacement":
         // Same condition as the toolbar switch: only meaningful once there is a callout.

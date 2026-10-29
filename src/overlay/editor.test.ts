@@ -235,6 +235,74 @@ describe("key auto-repeat", () => {
   });
 });
 
+describe("typed callout numbers", () => {
+  const digit = (d: number) => key(`Digit${d}`, false, String(d));
+  /** Opens the selected callout's input to read its badge label, then closes it again. */
+  const labelOfSelected = () => {
+    key("Enter");
+    const label = editor.getView().input?.label;
+    editor.closeInput();
+    return label;
+  };
+  /** A mark placed with the Callout tool, its input closed with a comment. */
+  const placeMark = (x: number, y: number) => {
+    click(x, y);
+    editor.setInputValue("c");
+    editor.submitInput();
+  };
+
+  beforeEach(() => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([100, 100], [400, 400]);
+    editor.setTool("mark");
+  });
+
+  it("set the number of the selected callout, and the next one continues from it", () => {
+    placeMark(150, 150);
+    click(150, 150);
+    digit(9);
+    expect(labelOfSelected()).toBe("9");
+    click(250, 250);
+    expect(editor.getView().input?.label).toBe("10");
+    editor.setInputValue("c");
+    editor.submitInput();
+    click(150, 150);
+    digit(1);
+    click(300, 300);
+    expect(editor.getView().input?.label).toBe("2");
+  });
+
+  it("join two quick digits in one undo step", () => {
+    placeMark(150, 150);
+    click(150, 150);
+    digit(1);
+    digit(2);
+    expect(labelOfSelected()).toBe("12");
+    editor.undo();
+    click(150, 150);
+    expect(labelOfSelected()).toBe("1");
+  });
+
+  it("start over after a pause, and ignore a lone 0", () => {
+    placeMark(150, 150);
+    click(150, 150);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    digit(0);
+    digit(4);
+    now.mockReturnValue(2500);
+    digit(7);
+    now.mockRestore();
+    expect(labelOfSelected()).toBe("7");
+  });
+
+  it("do nothing without a selected callout", () => {
+    placeMark(150, 150);
+    digit(5);
+    click(150, 150);
+    expect(labelOfSelected()).toBe("1");
+  });
+});
+
 describe("comment bubbles", () => {
   const hover = (x: number, y: number) => {
     canvas.events.fire("pointermove", pointer(x, y));
@@ -602,7 +670,7 @@ describe("captions after drawing", () => {
     expect(editor.getView()).toMatchObject({ markCount: 0, canUndo: true });
   });
 
-  it("share the numbering with marks", async () => {
+  it("share the numbering with marks and keep their number when a mark goes", async () => {
     selectArea();
     editor.setTool("mark");
     drag([120, 120], [120, 120]);
@@ -618,7 +686,7 @@ describe("captions after drawing", () => {
     key("Delete");
     expect(editor.getView().markCount).toBe(1);
     await editor.finish("copy");
-    expect(meta().marks).toEqual([{ num: 1, comment: "frame" }]);
+    expect(meta().marks).toEqual([{ num: 2, comment: "frame" }]);
   });
 
   it("go into the separate text like the other callouts", async () => {

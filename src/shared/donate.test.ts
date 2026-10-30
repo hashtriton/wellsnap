@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { donatePageUrl, isAllowedExternalUrl, ISSUES_URL, RELEASES_URL, REPO_URL } from "./donate";
+import { donatePageUrl, isAllowedExternalUrl, RELEASES_URL, REPO_URL } from "./donate";
 
 describe("donate", () => {
   it("mirrors the Rust allowlist", () => {
     expect(isAllowedExternalUrl(REPO_URL)).toBe(true);
     expect(isAllowedExternalUrl(RELEASES_URL)).toBe(true);
-    expect(isAllowedExternalUrl(ISSUES_URL)).toBe(true);
     expect(isAllowedExternalUrl("https://wellsnap.net/ru/donate/?from=app")).toBe(true);
     expect(isAllowedExternalUrl("https://www.wellsnap.net/")).toBe(true);
     expect(isAllowedExternalUrl("https://pay.cloudtips.ru/p/12345678")).toBe(false);

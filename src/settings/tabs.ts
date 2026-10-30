@@ -1,4 +1,4 @@
-export const TABS = ["general", "hotkeys", "screenshots", "support", "privacy", "about"] as const;
+export const TABS = ["general", "hotkeys", "screenshots", "support", "feedback", "privacy", "about"] as const;
 export type Tab = (typeof TABS)[number];
 
 /** Tab from a URL hash ("#support") or a "settings:tab" payload ("support"); null when unknown. */

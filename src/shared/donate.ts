@@ -4,7 +4,6 @@ import type { Lang } from "./ipc";
 
 export const REPO_URL = "https://github.com/hashtriton/wellsnap";
 export const RELEASES_URL = `${REPO_URL}/releases`;
-export const ISSUES_URL = `${REPO_URL}/issues`;
 
 /** Donation page in the app language; `from=app` tells visits from the app apart in the site's statistics. */
 export function donatePageUrl(lang: Lang): string {

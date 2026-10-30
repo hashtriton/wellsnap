@@ -9,6 +9,7 @@ import { guessPlatform } from "../shared/ui/hotkey";
 import { Icon, type IconName } from "../shared/ui/icons";
 import { Notice } from "../shared/ui/controls";
 import { About } from "./About";
+import { Feedback } from "./Feedback";
 import { General } from "./General";
 import { Hotkeys } from "./Hotkeys";
 import { Privacy } from "./Privacy";
@@ -22,6 +23,7 @@ const ICONS: Record<Tab, IconName> = {
   hotkeys: "keyboard",
   screenshots: "image",
   support: "heart",
+  feedback: "message",
   privacy: "shield",
   about: "info",
 };
@@ -31,6 +33,7 @@ const PAGES: Record<Tab, (p: PageProps) => ReactNode> = {
   hotkeys: Hotkeys,
   screenshots: Screenshots,
   support: Support,
+  feedback: Feedback,
   privacy: Privacy,
   about: About,
 };

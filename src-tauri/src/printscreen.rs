@@ -28,6 +28,9 @@ pub use platform::{restore, status, take_over};
 /// Also used for the installer's privacy choice (install_privacy.rs), in the same key.
 #[cfg(windows)]
 pub(crate) use platform::{OUR_KEY, delete_value, read_dword, write_dword};
+/// Also named in the feedback form (feedback.rs).
+#[cfg(windows)]
+pub(crate) use platform::windows_build;
 
 #[cfg(not(windows))]
 pub fn status() -> PrintScreenStatus {
@@ -184,7 +187,7 @@ mod platform {
         Ok(())
     }
 
-    fn windows_build() -> Option<u32> {
+    pub(crate) fn windows_build() -> Option<u32> {
         let key = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
         match read_value(HKEY_LOCAL_MACHINE, key, w!("CurrentBuildNumber"), RRF_RT_REG_SZ) {
             Ok(Some(RegData::Text(s))) => s.trim().parse().ok(),

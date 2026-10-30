@@ -213,6 +213,8 @@ export interface PrintScreenStatus {
 export interface AppInfo {
   version: string;
   platform: Platform;
+  /** "Windows 11 (26100)", as the feedback form sends it. */
+  os: string;
   lang: Lang;
   hotkeys: HotkeyStatus;
   printScreen: PrintScreenStatus;
@@ -222,6 +224,8 @@ export interface AppInfo {
   /** This build can send crash reports and statistics; otherwise it sends nothing at all. */
   telemetry: boolean;
 }
+
+export type FeedbackError = "empty" | "tooLong" | "badEmail" | "rateLimited" | "dailyLimit" | "offline" | "failed";
 
 export interface UpdateInfo {
   version: string;
@@ -354,6 +358,8 @@ export const api = {
   donationSetStatus: (supporter: boolean, reminders: boolean) =>
     invoke<void>("donation_set_status", { supporter, reminders }),
   donationResetCounters: () => invoke<void>("donation_reset_counters"),
+  /** Rejects with a FeedbackError. */
+  sendFeedback: (message: string, email: string) => invoke<void>("send_feedback", { message, email }),
 
   noticeClose: () => invoke<void>("notice_close"),
   /** Called once the notice page listens; returns the notice that may have been emitted before that. */

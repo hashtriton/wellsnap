@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { api } from "../shared/ipc";
 import type { TFunction } from "../shared/i18n";
-import { donatePageUrl, ISSUES_URL, REPO_URL } from "../shared/donate";
+import { donatePageUrl, REPO_URL } from "../shared/donate";
 import { Button, Notice, Row, Segmented, Switch } from "../shared/ui/controls";
 import { Icon } from "../shared/ui/icons";
 import { QrCode } from "../shared/ui/QrCode";
@@ -14,7 +14,7 @@ import type { PageProps } from "./types";
 
 type Reminders = "rare" | "never";
 
-export function Support({ t, lang, settings, info }: PageProps) {
+export function Support({ t, lang, settings, info, goTo }: PageProps) {
   const d = settings.donations;
   const texts = privacyKeys(info);
   const supporter = d.status === "supporter";
@@ -135,8 +135,8 @@ export function Support({ t, lang, settings, info }: PageProps) {
             <Button size="s" icon="star" onClick={() => open(REPO_URL)}>
               {t("settings.support.star")}
             </Button>
-            <Button size="s" icon="message" onClick={() => open(ISSUES_URL)}>
-              {t("settings.support.issue")}
+            <Button size="s" icon="message" onClick={() => goTo("feedback")}>
+              {t("settings.support.feedback")}
             </Button>
           </div>
         </div>

@@ -5,6 +5,7 @@
 use crate::actions::{self, FinishMeta};
 use crate::conflicts::ConflictReport;
 use crate::donations::PromptOutcome;
+use crate::feedback::FeedbackError;
 use crate::i18n::Lang;
 use crate::printscreen::{self, PrintScreenStatus};
 use crate::session::Snapshot;
@@ -144,6 +145,8 @@ fn apply_side_effects(app: &AppHandle, before: &Settings, after: &Settings) {
 pub struct AppInfo {
     version: String,
     platform: &'static str,
+    /// "Windows 11 (26100)", as the feedback form sends it.
+    os: &'static str,
     lang: Lang,
     hotkeys: HotkeyStatus,
     print_screen: PrintScreenStatus,
@@ -160,6 +163,7 @@ pub async fn get_app_info(app: AppHandle) -> AppInfo {
     AppInfo {
         version: app.package_info().version.to_string(),
         platform: if cfg!(target_os = "macos") { "macos" } else if cfg!(windows) { "windows" } else { "other" },
+        os: crate::feedback::os_label(),
         lang: state.lang(),
         hotkeys: state.hotkeys.lock().unwrap().clone(),
         print_screen: printscreen::status(),
@@ -448,6 +452,13 @@ pub fn donation_reset_counters(app: AppHandle) {
 }
 
 #[tauri::command]
+pub async fn send_feedback(app: AppHandle, message: String, email: String) -> Result<(), FeedbackError> {
+    let version = app.package_info().version.to_string();
+    let lang = app.state::<AppState>().lang();
+    crate::feedback::send(&version, lang, &message, &email).await
+}
+
+#[tauri::command]
 pub fn notice_close(app: AppHandle) {
     crate::notice::hide(&app);
 }
@@ -630,6 +641,7 @@ mod tests {
         let info = AppInfo {
             version: String::new(),
             platform: "windows",
+            os: "Windows 11 (26100)",
             lang: Lang::En,
             hotkeys: HotkeyStatus::default(),
             print_screen: PrintScreenStatus::default(),
@@ -638,6 +650,8 @@ mod tests {
             save_dir: String::new(),
             telemetry: false,
         };
-        assert_eq!(serde_json::to_value(info).unwrap()["telemetry"], false);
+        let info = serde_json::to_value(info).unwrap();
+        assert_eq!((&info["telemetry"], &info["os"]), (&false.into(), &"Windows 11 (26100)".into()));
+        assert_eq!(serde_json::to_value(FeedbackError::RateLimited).unwrap(), "rateLimited");
     }
 }

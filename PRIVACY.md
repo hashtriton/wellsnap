@@ -42,7 +42,7 @@ Settings > Privacy > "Send anonymous usage statistics". Turning it off deletes t
 - Nothing is sent before the first setup window is finished.
 - The Windows installer shows this information and lets you turn off crash reports and statistics before installing.
 - Any time later: Settings > Privacy. "Show what was sent" lists what left your computer; "Reset install number" starts a new random number.
-- Builds compiled from source without the telemetry keys send nothing.
+- Builds compiled from source without the telemetry keys send nothing on their own.
 
 ## The Ctrl+V key
 
@@ -51,7 +51,8 @@ While WellSnap's own copy with comment text is on the clipboard, WellSnap watche
 ## Other network requests
 
 - **Updates.** WellSnap asks GitHub for the latest version shortly after start and every 12 hours, and downloads new versions from GitHub. Nothing else is sent with this check. Turn it off under Settings > About.
-- **Links.** Buttons such as "Support the project" or "Report a bug" open a page in your browser. WellSnap itself sends nothing there.
+- **Feedback.** Settings > Feedback sends your message only when you press "Send". It goes to wellsnap.net, which forwards it by email to the author. With the message go the email address you typed (optional, so that the author can reply), the WellSnap version, the system version and the UI language. Screenshots and files are not attached. The site sees your IP address, as any site does, and it appears in the hosting's standard access logs; the feedback script itself keeps only a hash of it made with a secret key, to limit how many messages can be sent in an hour. The email is kept in the author's mailbox and used only to answer and improve WellSnap.
+- **Links.** Buttons such as "Support the project" open a page in your browser. WellSnap itself sends nothing there.
 
 ## Third-party services
 
@@ -63,8 +64,8 @@ The data is used only to fix bugs and improve WellSnap. It is not sold and not u
 
 ## Questions and deletion
 
-The data carries no name, account or contact, so it cannot be matched to a person. "Reset install number" in Settings > Privacy separates everything sent later from what was sent before. Sentry and PostHog delete old data under their own retention rules.
+Crash reports and statistics carry no name, account or contact, so they cannot be matched to a person. "Reset install number" in Settings > Privacy separates everything sent later from what was sent before. Sentry and PostHog delete old data under their own retention rules.
 
-Questions: <https://github.com/hashtriton/wellsnap/issues>.
+Questions, or a request to delete a feedback message: Settings > Feedback, or <wellsnap@welldone.one>.
 
 Changes to this policy are published in this repository.

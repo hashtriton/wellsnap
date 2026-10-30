@@ -7,6 +7,7 @@ mod conflicts;
 mod ctrl_v;
 mod donations;
 mod export;
+mod feedback;
 mod hotkeys;
 mod i18n;
 mod install_privacy;
@@ -168,6 +169,7 @@ pub fn run() {
             commands::donation_outcome,
             commands::donation_set_status,
             commands::donation_reset_counters,
+            commands::send_feedback,
             commands::notice_close,
             commands::notice_ready,
             commands::onboarding_complete,

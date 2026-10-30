@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppMark } from "../assets/AppMark";
 import type { TFunction } from "../shared/i18n";
 import { api, events, type Lang, type Settings, type UpdateStatus } from "../shared/ipc";
-import { ISSUES_URL, RELEASES_URL, REPO_URL } from "../shared/donate";
+import { RELEASES_URL, REPO_URL } from "../shared/donate";
 import { Button, Notice, Row, Switch } from "../shared/ui/controls";
 import { Icon, type IconName } from "../shared/ui/icons";
 import { openLink } from "./links";
@@ -32,7 +32,7 @@ export function About({ t, lang, info, goTo, settings, update }: PageProps) {
   const links: { icon: IconName; label: string; onClick: () => void }[] = [
     { icon: "code", label: t("settings.about.repo"), onClick: () => open(REPO_URL) },
     { icon: "refresh", label: t("settings.about.releases"), onClick: () => open(RELEASES_URL) },
-    { icon: "message", label: t("settings.about.issues"), onClick: () => open(ISSUES_URL) },
+    { icon: "message", label: t("settings.about.feedback"), onClick: () => goTo("feedback") },
     { icon: "heart", label: t("settings.about.support"), onClick: () => goTo("support") },
   ];
   const recent = status?.recent ?? null;

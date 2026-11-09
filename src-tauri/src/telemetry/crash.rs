@@ -426,6 +426,10 @@ fn watch_webviews(app: &AppHandle) {
     fn watch(webview: &tauri::Webview) {
         let label = webview.label().to_string();
         crate::webview_win::watch_process_failed(webview, move |failure| {
+            if crate::webview_win::session_ending() {
+                log::info!("{label}: webview {} while Windows ends the session", failure.kind);
+                return;
+            }
             webview_failed(&label, failure.kind, Some(failure.reason), failure.exit_code);
         });
     }

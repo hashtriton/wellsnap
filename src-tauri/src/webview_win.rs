@@ -131,6 +131,14 @@ pub fn watch_process_failed(webview: &tauri::Webview, on_failed: impl Fn(Process
     }
 }
 
+/// True while Windows ends the session (shutdown, restart, sign-out). It closes the WebView2 processes before
+/// WellSnap, so their ProcessFailed then is not a failure.
+#[cfg(feature = "telemetry")]
+pub fn session_ending() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
 #[cfg(feature = "telemetry")]
 fn describe_failure(args: &ICoreWebView2ProcessFailedEventArgs) -> ProcessFailure {
     let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
@@ -191,5 +199,10 @@ mod tests {
         assert_eq!(kind_name(COREWEBVIEW2_PROCESS_FAILED_KIND(99)), "other");
         assert_eq!(reason_name(COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED), "crashed");
         assert_eq!(reason_name(COREWEBVIEW2_PROCESS_FAILED_REASON(99)), "other");
+    }
+
+    #[test]
+    fn session_not_ending_in_a_normal_run() {
+        assert!(!session_ending());
     }
 }

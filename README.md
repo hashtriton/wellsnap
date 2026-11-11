@@ -1,10 +1,10 @@
 # WellSnap
 
-Screenshots with arrows, blur and callouts, for Windows and macOS.
+Screenshots with arrows, blur and callouts, for Windows and macOS. Website: [wellsnap.net](https://wellsnap.net/).
 
 Press the hotkey, select an area, mark what matters and paste it into a chat. Several screenshots can be collected into a set (A, B, C...) with numbered comments and pasted into Telegram, WhatsApp, Discord, mail or a document in one go.
 
-**По-русски:** WellSnap делает скриншоты со стрелками, размытием и нумерованными сносками. Несколько снимков с комментариями вставляются в чат одним сообщением. Программа бесплатная, без рекламы, с открытым исходным кодом.
+**По-русски:** WellSnap делает скриншоты со стрелками, размытием и нумерованными сносками. Несколько снимков с комментариями вставляются в чат одним сообщением. Программа бесплатная, без рекламы, с открытым исходным кодом. Сайт: [wellsnap.net/ru](https://wellsnap.net/ru/).
 
 ## Features
 
@@ -17,9 +17,17 @@ Press the hotkey, select an area, mark what matters and paste it into a chat. Se
 - Customizable hotkeys, Russian and English interface, light and dark themes.
 - Quiet automatic updates.
 
+## Learn more
+
+- [Keyboard shortcuts](https://wellsnap.net/keyboard-shortcuts/)
+- [Blur that cannot be undone](https://wellsnap.net/blur-screenshot/)
+- [Print Screen opens Snipping Tool on Windows 11: how to give the key back](https://wellsnap.net/print-screen-snipping-tool/)
+- Coming from another tool: [Lightshot](https://wellsnap.net/lightshot-alternative/), [ShareX](https://wellsnap.net/sharex-alternative/), [Greenshot](https://wellsnap.net/greenshot-alternative/), [Snipping Tool](https://wellsnap.net/snipping-tool-alternative/)
+- [Screenshot guides](https://wellsnap.net/guides/)
+
 ## Download
 
-Installers for Windows (10 and 11) and macOS (14 or later) are on the [Releases](https://github.com/hashtriton/wellsnap/releases) page. The Windows installer installs for the current user and does not need administrator rights.
+[Download for Windows and macOS](https://wellsnap.net/download/) from the website, or take an installer from the [Releases](https://github.com/hashtriton/wellsnap/releases) page. Windows 10 and 11, macOS 14 or later. The Windows installer installs for the current user and does not need administrator rights.
 
 ## Privacy
 

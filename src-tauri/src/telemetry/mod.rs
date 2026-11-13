@@ -120,11 +120,16 @@ pub fn onboarding_finished(app: &AppHandle) {
 }
 
 /// macOS killed a webview's WebContent process (the page is blank until it loads again). Registered in
-/// `lib.rs`; WKWebView does nothing on its own, so the report and the reload both belong here.
+/// `lib.rs`; WKWebView does nothing on its own, so the report, the end of a capture the page was part of and the
+/// reload all belong here.
 #[cfg(target_os = "macos")]
 pub fn web_content_terminated(webview: &tauri::Webview<tauri::Wry>) {
+    use tauri::Manager;
     #[cfg(feature = "telemetry")]
     crash::webview_failed(webview.label(), "web_content_terminated", None, None);
+    if crate::overlay::is_overlay_label(webview.label()) {
+        crate::overlay::page_lost(webview.app_handle(), webview.label());
+    }
     if reload_allowed(webview.label()) {
         if let Err(err) = webview.reload() {
             log::warn!("could not reload {} after its WebContent process ended: {err}", webview.label());

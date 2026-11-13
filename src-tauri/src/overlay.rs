@@ -550,7 +550,7 @@ pub fn on_window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent)
                 let mut ov = state.overlay.lock().unwrap();
                 ov.loaded.remove(label);
                 // Not an overlay of this capture: rebuilt for other monitors, or released while idle.
-                ov.active && !ov.releasing && ov.monitors.iter().any(|m| label_for(m) == label)
+                ov.in_capture(label)
             };
             if in_capture {
                 log::warn!("overlay {label} was destroyed during a capture");
@@ -558,6 +558,20 @@ pub fn on_window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent)
             }
         }
         _ => {}
+    }
+}
+
+/// macOS ended the WebContent process of overlay `label`, and its page loads again without the frame: Esc does
+/// nothing there, the capture stays active so the hotkey does nothing either, and the window covers the menu bar.
+/// A capture it belongs to ends, as when an overlay window is destroyed.
+#[cfg(target_os = "macos")]
+pub fn page_lost(app: &AppHandle, label: &str) {
+    let state = app.state::<AppState>();
+    let in_capture = state.overlay.lock().unwrap().in_capture(label);
+    if in_capture {
+        log::warn!("overlay {label} lost its page during a capture");
+        hide_all(app);
+        crate::notice::toast_error(app, crate::i18n::tr(state.lang(), "toast.captureFailed"), None);
     }
 }
 
@@ -653,6 +667,11 @@ impl OverlayState {
         self.active = false;
         self.releasing = false;
         std::mem::take(&mut self.pending_capture)
+    }
+
+    /// Overlay `label` belongs to the running capture, not to the idle release or an update holding the overlays.
+    fn in_capture(&self, label: &str) -> bool {
+        self.active && !self.releasing && self.monitors.iter().any(|m| label_for(m) == label)
     }
 
     /// Overlay `label` of capture `capture_id` was clipped to its snapshot, or given its whole frame back.
@@ -778,6 +797,22 @@ mod tests {
         ov.active = false;
         assert_eq!(ov.region_changed("overlay-0", 8, true), None, "the capture ended");
         assert_eq!(ov.live, None);
+    }
+
+    #[test]
+    fn only_a_running_capture_ends_with_a_lost_overlay() {
+        let m = monitor("0", 0, 0, 3024, 1964, 2.0);
+        let mut ov = OverlayState { monitors: vec![m.clone()], ..Default::default() };
+        assert!(!ov.in_capture("overlay-0"), "hidden between captures: reloading the page is enough");
+        assert!(ov.request_capture());
+        assert!(ov.in_capture("overlay-0"));
+        assert!(!ov.in_capture("overlay-1"), "built for a monitor that is gone");
+        ov.finishing = true;
+        assert!(ov.in_capture("overlay-0"), "a finish that fails would leave the overlay with nothing to show");
+
+        let mut held = OverlayState { monitors: vec![m], ..Default::default() };
+        assert!(held.claim_for_update());
+        assert!(!held.in_capture("overlay-0"), "the overlays are held by an update or the idle release");
     }
 
     #[test]

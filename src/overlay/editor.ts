@@ -148,10 +148,11 @@ export interface View {
   mac: boolean;
 }
 
-type EditorSettings = Pick<Settings, "showHints" | "enterAction" | "commentPlacement" | "imageFormat" | "jpgQuality" | "toolPrefs">;
+type EditorSettings = Pick<Settings, "showHints" | "showLoupe" | "enterAction" | "commentPlacement" | "imageFormat" | "jpgQuality" | "toolPrefs">;
 
 const DEFAULT_SETTINGS: EditorSettings = {
   showHints: true,
+  showLoupe: true,
   enterAction: "copy",
   commentPlacement: "onImage",
   imageFormat: "png",
@@ -245,7 +246,6 @@ export class Editor {
   private pointer: Pt | null = null;
   private shift = false;
   private input: InputState | null = null;
-  private loupeOn = true;
   private sizeLabelUntil = 0;
   private brushUntil = 0;
   private wheelAcc = 0;
@@ -269,6 +269,8 @@ export class Editor {
   private prefsSaves = 0;
   /** Saves of the placement in flight: until they land, a settings event must not undo the local choice. */
   private placementSaves = 0;
+  /** Saves of the loupe switch (Z) in flight, same as the placement. */
+  private loupeSaves = 0;
   /** Canvas presses so far, to tell which press drew what. */
   private presses = 0;
   /** The last two shapes drawn and the steps that added them, so a double-click can take back what its own clicks drew. */
@@ -547,7 +549,10 @@ export class Editor {
   }
 
   applySettings(s: Settings): void {
-    this.settings = this.placementSaves > 0 ? { ...s, commentPlacement: this.settings.commentPlacement } : s;
+    let next: EditorSettings = s;
+    if (this.placementSaves > 0) next = { ...next, commentPlacement: this.settings.commentPlacement };
+    if (this.loupeSaves > 0) next = { ...next, showLoupe: this.settings.showLoupe };
+    this.settings = next;
     if (!this.prefsTimer && this.prefsSaves === 0) this.prefs = parsePrefs(s.toolPrefs);
     this.emit();
     this.requestRender();
@@ -564,6 +569,17 @@ export class Editor {
       .finally(() => this.placementSaves--);
     this.emit();
     this.requestRender();
+  }
+
+  /** Z: shows or hides the loupe and remembers it, the same setting as the switch in Settings. */
+  private toggleLoupe(): void {
+    const showLoupe = !this.settings.showLoupe;
+    this.settings = { ...this.settings, showLoupe };
+    this.loupeSaves++;
+    api
+      .updateSettings({ showLoupe })
+      .catch(() => {})
+      .finally(() => this.loupeSaves--);
   }
 
   private savePrefs(): void {
@@ -900,10 +916,15 @@ export class Editor {
     ctx.stroke();
   }
 
-  private loupeVisible(): boolean {
-    if (!this.loupeOn || !this.pointer || this.input || this.busy) return false;
+  /** Before the area is selected and while its edges are dragged: the only time the loupe is shown. */
+  private loupePhase(): boolean {
     const d = this.drag;
     return this.phase === "idle" || d?.kind === "create" || d?.kind === "resizeSel";
+  }
+
+  private loupeVisible(): boolean {
+    if (!this.settings.showLoupe || !this.pointer || this.input || this.busy) return false;
+    return this.loupePhase();
   }
 
   private drawLoupe(ctx: CanvasRenderingContext2D): void {
@@ -1882,7 +1903,9 @@ export class Editor {
         if (ready) this.stepSize(cmd === "widthUp" ? 1 : -1);
         return;
       case "loupe":
-        this.loupeOn = !this.loupeOn;
+        // Z is saved for good: not where the loupe is hidden anyway, such as Ctrl+Z with Ctrl let go too early.
+        if (!this.loupePhase()) return;
+        this.toggleLoupe();
         break;
       case "renumber":
         // Not mid-drag: the drop would put the number from before the drag back.

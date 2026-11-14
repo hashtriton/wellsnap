@@ -61,6 +61,16 @@ export function General({ t, platform, settings, update }: PageProps) {
             />
           )}
         </Row>
+        <Row label={t("settings.general.loupe")} description={t("settings.general.loupeDesc")}>
+          {({ labelId, descId }) => (
+            <Switch
+              labelledBy={labelId}
+              describedBy={descId}
+              checked={settings.showLoupe}
+              onChange={(showLoupe) => update({ showLoupe })}
+            />
+          )}
+        </Row>
       </section>
     </>
   );

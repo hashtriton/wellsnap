@@ -513,7 +513,7 @@ describe("captions after drawing", () => {
     return (calls[calls.length - 1][0] as { toolPrefs: { captions: unknown } }).toolPrefs;
   };
   const settings = (toolPrefs: Record<string, unknown>) =>
-    ({ showHints: true, enterAction: "copy", commentPlacement: "onImage", imageFormat: "png", jpgQuality: 90, toolPrefs }) as unknown as Settings;
+    ({ showHints: true, showLoupe: true, enterAction: "copy", commentPlacement: "onImage", imageFormat: "png", jpgQuality: 90, toolPrefs }) as unknown as Settings;
 
   function selectArea(): void {
     editor.onFrame(payload, new Uint8ClampedArray(0));
@@ -993,5 +993,65 @@ describe("Lightshot habits", () => {
     expect(api.overlayCancel).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(api.overlayFinish).toHaveBeenCalledTimes(1));
     expect(finishMetaOf()).toMatchObject({ action: "save" });
+  });
+});
+
+describe("loupe", () => {
+  const settings = (showLoupe: boolean) =>
+    ({ showHints: true, showLoupe, enterAction: "copy", commentPlacement: "onImage", imageFormat: "png", jpgQuality: 90, toolPrefs: {} }) as unknown as Settings;
+
+  /** Before the selection is done, nothing but the loupe redraws on a plain pointer move. */
+  function hoverRedraws(x: number, y: number): boolean {
+    flushFrames();
+    canvas.events.fire("pointermove", pointer(x, y));
+    const redraws = frames.length > 0;
+    flushFrames();
+    return redraws;
+  }
+
+  it("follows the pointer while the area is chosen, not after", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    expect(hoverRedraws(50, 50)).toBe(true);
+    drag([100, 100], [300, 300]);
+    expect(hoverRedraws(150, 150)).toBe(false);
+  });
+
+  it("stays hidden while the switch in Settings is off", () => {
+    editor.applySettings(settings(false));
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    expect(hoverRedraws(50, 50)).toBe(false);
+    editor.applySettings(settings(true));
+    expect(hoverRedraws(60, 60)).toBe(true);
+  });
+
+  it("turns off with Z and saves the setting; a settings event sent before the save does not undo it", async () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    key("KeyZ", false, "z");
+    expect(api.updateSettings).toHaveBeenCalledWith({ showLoupe: false });
+    expect(hoverRedraws(50, 50)).toBe(false);
+    editor.applySettings(settings(true));
+    expect(hoverRedraws(60, 60)).toBe(false);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    // Saved: settings events apply again, such as the switch turned back on in Settings.
+    editor.applySettings(settings(true));
+    expect(hoverRedraws(70, 70)).toBe(true);
+    key("KeyZ", false, "z");
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ showLoupe: false });
+    expect(hoverRedraws(80, 80)).toBe(false);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    editor.applySettings(settings(false));
+    key("KeyZ", false, "z");
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ showLoupe: true });
+    expect(hoverRedraws(90, 90)).toBe(true);
+  });
+
+  it("does not switch with Z once the area is selected, where it is not shown", () => {
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    drag([100, 100], [300, 300]);
+    key("KeyZ", false, "z");
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    editor.reset();
+    editor.onFrame(payload, new Uint8ClampedArray(0));
+    expect(hoverRedraws(50, 50)).toBe(true);
   });
 });

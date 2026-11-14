@@ -65,6 +65,8 @@ export interface Settings {
   commentPlacement: CommentPlacement;
   enterAction: EnterAction;
   showHints: boolean;
+  /** The loupe while an area is being selected; Z in the overlay toggles and saves it too. */
+  showLoupe: boolean;
   hideStripFromCapture: boolean;
   /** Owned by the overlay editor: per-tool color and width. */
   toolPrefs: Record<string, unknown>;

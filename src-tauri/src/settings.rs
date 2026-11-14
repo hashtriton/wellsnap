@@ -82,6 +82,8 @@ pub struct Settings {
     pub comment_placement: CommentPlacement,
     pub enter_action: EnterAction,
     pub show_hints: bool,
+    /// The magnifier next to the pointer while an area is being selected; Z in the overlay toggles it too.
+    pub show_loupe: bool,
     /// Exclude the snapshot strip from screen capture and screen sharing.
     pub hide_strip_from_capture: bool,
     /// Per-tool colors and widths, owned by the overlay editor.
@@ -121,6 +123,7 @@ impl Default for Settings {
             comment_placement: CommentPlacement::OnImage,
             enter_action: EnterAction::Copy,
             show_hints: true,
+            show_loupe: true,
             hide_strip_from_capture: true,
             tool_prefs: serde_json::Value::Object(Default::default()),
             onboarding_done: false,
@@ -248,7 +251,9 @@ mod tests {
         assert_eq!(s.hotkey_warning, None);
         assert_eq!(s.crash_reports, CrashMode::Always, "opt-out: on for existing installs too");
         assert!(s.usage_stats);
+        assert!(s.show_loupe);
         let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["showLoupe"], true);
         assert_eq!(json["autoCheckUpdates"], true);
         assert_eq!(json["autoInstallUpdates"], true);
         assert_eq!(json["printScreenTakenOver"], false);

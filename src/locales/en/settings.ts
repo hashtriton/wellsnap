@@ -28,6 +28,8 @@ export const settings: typeof ru = {
       "WellSnap is ready as soon as you sign in. If it does not start, check System Settings > General > Login Items.",
     hints: "Show hints",
     hintsDesc: "Short key hints in the screenshot editor.",
+    loupe: "Show the loupe while selecting",
+    loupeDesc: "Magnified pixels, coordinates and color under the pointer while you select an area. In the editor, Z turns the loupe on and off too.",
   },
   hotkeys: {
     title: "Shortcuts",

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactM
 import type { TFunction } from "../../shared/i18n";
 import type { CommentPlacement, FinishAction } from "../../shared/ipc";
 import type { Editor, View } from "../editor";
-import { placeToolbar, type Side, type ToolbarPlacement } from "../geometry";
+import { placeToolbar, toolbarPlacementChanged, type Side, type ToolbarPlacement } from "../geometry";
 import { shortcutOf, TOOL_COMMANDS, type CommandId } from "../keys";
 import { MARK_COLOR, PALETTE, WIDTHS } from "../prefs";
 import type { Size, Tool } from "../types";
@@ -102,7 +102,7 @@ export function Toolbar({ editor, view, t }: Props) {
       setOrientation(next.orientation);
       return;
     }
-    if (!place || place.x !== next.x || place.y !== next.y || place.side !== next.side) setPlace(next);
+    if (toolbarPlacementChanged(place, next)) setPlace(next);
   });
 
   useEffect(() => () => window.clearTimeout(tipTimer.current), []);

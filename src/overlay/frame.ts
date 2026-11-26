@@ -26,11 +26,15 @@ function webview2(): WebView2Bridge | undefined {
  * `onFrame` must draw the pixels synchronously: shared memory is released right after it returns.
  */
 export function listenForFrames(onFrame: (payload: PreparePayload, rgba: Uint8ClampedArray) => void): void {
+  let latestCaptureId = -1;
   const bridge = webview2();
   bridge?.addEventListener("sharedbufferreceived", (e) => {
     const buffer = e.getBuffer();
     try {
-      onFrame(e.additionalData as PreparePayload, new Uint8ClampedArray(buffer));
+      const payload = e.additionalData as PreparePayload;
+      if (payload.captureId < latestCaptureId) return;
+      latestCaptureId = payload.captureId;
+      onFrame(payload, new Uint8ClampedArray(buffer));
     } finally {
       bridge.releaseBuffer(buffer);
     }
@@ -39,9 +43,13 @@ export function listenForFrames(onFrame: (payload: PreparePayload, rgba: Uint8Cl
   // listener is registered: otherwise the first prepare can arrive before it and the capture times out.
   void events
     .onPrepare(async (payload) => {
+      if (payload.captureId < latestCaptureId) return;
+      latestCaptureId = payload.captureId;
       const response = await fetch(convertFileSrc(payload.framePath, "wsnap"), { cache: "no-store" });
+      if (payload.captureId !== latestCaptureId) return;
       if (!response.ok) throw new Error(`frame request failed: ${response.status}`);
-      onFrame(payload, new Uint8ClampedArray(await response.arrayBuffer()));
+      const bytes = await response.arrayBuffer();
+      if (payload.captureId === latestCaptureId) onFrame(payload, new Uint8ClampedArray(bytes));
     })
     .then(() => invoke("overlay_page_loaded"));
 }

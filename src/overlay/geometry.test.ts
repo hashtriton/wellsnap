@@ -10,7 +10,9 @@ import {
   snap45,
   snapAxis,
   squareEnd,
+  toolbarPlacementChanged,
   visibleHandles,
+  type ToolbarPlacement,
 } from "./geometry";
 
 const screen = { w: 1920, h: 1080 };
@@ -167,6 +169,24 @@ describe("placeToolbar", () => {
         expect(p.y + size.h).toBeLessThanOrEqual(1080 - 8);
       }
     }
+  });
+});
+
+describe("toolbarPlacementChanged", () => {
+  const placed: ToolbarPlacement = { x: 8.499998474121071, y: 508, orientation: "horizontal", side: "below" };
+
+  it("ignores subpixel drift when the browser remeasures at 125% scale", () => {
+    const remeasured = { ...placed, x: 8.500010871887184 };
+    expect(toolbarPlacementChanged(placed, remeasured)).toBe(false);
+    expect(toolbarPlacementChanged(remeasured, placed)).toBe(false);
+    expect(toolbarPlacementChanged(placed, { ...placed, y: placed.y - 0.25 })).toBe(false);
+  });
+
+  it("applies the first placement, a new side, and movement of more than half a CSS pixel", () => {
+    expect(toolbarPlacementChanged(null, placed)).toBe(true);
+    expect(toolbarPlacementChanged(placed, { ...placed, side: "above" })).toBe(true);
+    expect(toolbarPlacementChanged(placed, { ...placed, x: placed.x + 0.75 })).toBe(true);
+    expect(toolbarPlacementChanged(placed, { ...placed, y: placed.y - 0.75 })).toBe(true);
   });
 });
 

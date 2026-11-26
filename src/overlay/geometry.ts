@@ -162,6 +162,14 @@ export interface ToolbarPlacement {
   side: Side | "inside";
 }
 
+/** Measuring the moved toolbar can shift its coordinates by a fraction of a CSS pixel. */
+export function toolbarPlacementChanged(current: ToolbarPlacement | null, next: ToolbarPlacement): boolean {
+  return !current
+    || current.side !== next.side
+    || Math.abs(current.x - next.x) > 0.5
+    || Math.abs(current.y - next.y) > 0.5;
+}
+
 /** Corner of the selection where its drag ended, so where the pointer is. */
 export interface Corner {
   right: boolean;

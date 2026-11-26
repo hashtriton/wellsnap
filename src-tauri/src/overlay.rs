@@ -17,6 +17,10 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const READY_TIMEOUT: Duration = Duration::from_millis(2500);
 /// A freshly created overlay page needs a moment to load before it can receive a frame.
+/// A cold WKWebView can still be starting its WebContent and GPU processes several seconds later.
+#[cfg(target_os = "macos")]
+const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(target_os = "macos"))]
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_millis(3000);
 /// Hidden overlays keep their webviews alive (about 230-290 MB with one 4K monitor, measured), so after this
 /// long without a capture they are destroyed; the next capture creates them again, a cold start.
@@ -198,22 +202,29 @@ pub fn begin_full_screen(app: &AppHandle) {
 
 fn begin(app: &AppHandle, mode: CaptureMode) {
     let state = app.state::<AppState>();
-    if !state.overlay.lock().unwrap().request_capture(mode) {
+    let capture_id = state.overlay.lock().unwrap().request_capture(mode);
+    let Some(capture_id) = capture_id else {
         focus_live(app);
         return;
-    }
+    };
     crate::telemetry::count("captures_started");
     let notice_hidden = crate::notice::hide_for_capture(app);
     let app = app.clone();
-    std::thread::spawn(move || run_capture(&app, notice_hidden, mode));
+    std::thread::spawn(move || run_capture(&app, capture_id, notice_hidden, mode));
 }
 
-fn run_capture(app: &AppHandle, notice_hidden: bool, mode: CaptureMode) {
+fn run_capture(app: &AppHandle, capture_id: u64, notice_hidden: bool, mode: CaptureMode) {
     let state = app.state::<AppState>();
     if !capture::has_permission() {
         crate::telemetry::count("capture_permission_denied");
         capture::request_permission();
-        state.overlay.lock().unwrap().active = false;
+        {
+            let mut ov = state.overlay.lock().unwrap();
+            if !ov.is_current_capture(capture_id) {
+                return;
+            }
+            ov.active = false;
+        }
         crate::windows_ui::open_onboarding(app);
         return;
     }
@@ -223,6 +234,9 @@ fn run_capture(app: &AppHandle, notice_hidden: bool, mode: CaptureMode) {
     let monitors = capture::monitors(app);
     crate::telemetry::monitors_seen(&monitors);
     let results = capture::capture_all(&monitors);
+    if !state.overlay.lock().unwrap().is_current_capture(capture_id) {
+        return;
+    }
     let cursor = cursor_point(app);
     ensure_windows(app, &monitors);
 
@@ -238,9 +252,11 @@ fn run_capture(app: &AppHandle, notice_hidden: bool, mode: CaptureMode) {
     // macOS preflight can say yes after the grant was revoked; only the capture itself tells.
     let denied = results.iter().any(|r| matches!(r, Err(capture::CaptureError::PermissionDenied)));
     let mut prepared = Vec::new();
-    let capture_id = {
+    {
         let mut ov = state.overlay.lock().unwrap();
-        ov.capture_id += 1;
+        if !ov.is_current_capture(capture_id) {
+            return;
+        }
         ov.frames.clear();
         ov.shown.clear();
         ov.finishing = false;
@@ -249,11 +265,11 @@ fn run_capture(app: &AppHandle, notice_hidden: bool, mode: CaptureMode) {
                 Ok(frame) => {
                     let label = label_for(m);
                     prepared.push(PreparePayload {
-                        capture_id: ov.capture_id,
+                        capture_id,
                         label: label.clone(),
                         monitor: m.clone(),
                         transport,
-                        frame_path: format!("frame/{}/{}", ov.capture_id, label),
+                        frame_path: format!("frame/{capture_id}/{label}"),
                         width: frame.width,
                         height: frame.height,
                         set_letter,
@@ -276,49 +292,46 @@ fn run_capture(app: &AppHandle, notice_hidden: bool, mode: CaptureMode) {
                 p.select_all = ov.focus.as_deref() == Some(p.label.as_str());
             }
         }
-        ov.capture_id
-    };
+    }
 
     if prepared.is_empty() {
-        hide_all(app);
-        let lang = state.lang();
-        if denied {
-            crate::telemetry::count("capture_permission_denied");
-            let hint = crate::i18n::tr(lang, "toast.screenPermissionHint");
-            crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.screenPermissionOff"), Some(hint));
-            // Once per run: repeated hotkey presses must not keep pulling System Settings to the front.
-            #[cfg(target_os = "macos")]
-            if !SCREEN_SETTINGS_OPENED.swap(true, std::sync::atomic::Ordering::Relaxed)
-                && let Err(err) = crate::macos::open_privacy_settings("screen")
-            {
-                log::error!("could not open the Screen Recording settings: {err}");
-            }
-        } else {
-            crate::telemetry::count("capture_failed");
-            crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.captureFailed"), None);
-        }
+        let ui_app = app.clone();
+        let _ = app.run_on_main_thread(move || report_capture_failure(&ui_app, capture_id, denied));
         return;
     }
-    wait_for_pages(app, &prepared);
-    for payload in prepared {
-        deliver(app, payload);
+    let Some(delivered) = deliver_to_loaded_pages(app, capture_id, prepared) else { return };
+    // Time spent starting a webview is separate from the time allowed to draw a delivered frame.
+    if delivered {
+        std::thread::sleep(READY_TIMEOUT);
     }
 
-    // Watchdog: an overlay that never reports ready must not leave the app stuck in "active".
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(READY_TIMEOUT);
-        let state = app.state::<AppState>();
-        let stuck = {
-            let ov = state.overlay.lock().unwrap();
-            ov.active && ov.capture_id == capture_id && ov.shown.is_empty()
-        };
-        if stuck {
-            log::error!("no overlay became ready within {READY_TIMEOUT:?}, cancelling capture");
-            crate::telemetry::count("overlay_not_ready");
-            hide_all(&app);
+    // Check on the UI thread, where overlay_ready and overlay_cancel are handled.
+    let ui_app = app.clone();
+    let _ = app.run_on_main_thread(move || cancel_if_no_overlay_ready(&ui_app, capture_id, delivered));
+}
+
+fn report_capture_failure(app: &AppHandle, capture_id: u64, denied: bool) {
+    let state = app.state::<AppState>();
+    if !state.overlay.lock().unwrap().is_current_capture(capture_id) {
+        return;
+    }
+    hide_all(app);
+    let lang = state.lang();
+    if denied {
+        crate::telemetry::count("capture_permission_denied");
+        let hint = crate::i18n::tr(lang, "toast.screenPermissionHint");
+        crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.screenPermissionOff"), Some(hint));
+        // Once per run: repeated hotkey presses must not keep pulling System Settings to the front.
+        #[cfg(target_os = "macos")]
+        if !SCREEN_SETTINGS_OPENED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && let Err(err) = crate::macos::open_privacy_settings("screen")
+        {
+            log::error!("could not open the Screen Recording settings: {err}");
         }
-    });
+    } else {
+        crate::telemetry::count("capture_failed");
+        crate::notice::toast_error(app, crate::i18n::tr(lang, "toast.captureFailed"), None);
+    }
 }
 
 /// One full screen save at a time, so a held key does not write a file per auto-repeat.
@@ -488,26 +501,59 @@ fn focus_target(
     under_cursor.or(monitors.first()).map(|m| label_for(m))
 }
 
-fn wait_for_pages(app: &AppHandle, prepared: &[PreparePayload]) {
+/// Starts each hand-off as soon as its page has a receiver, without holding up the other monitors.
+/// An unregistered page cannot receive prepare, so keep its payload until it loads or the deadline expires.
+fn deliver_to_loaded_pages(app: &AppHandle, capture_id: u64, mut pending: Vec<PreparePayload>) -> Option<bool> {
     let state = app.state::<AppState>();
     let deadline = Instant::now() + PAGE_LOAD_TIMEOUT;
-    while Instant::now() < deadline {
-        let all_loaded = {
-            let ov = state.overlay.lock().unwrap();
-            prepared.iter().all(|p| ov.loaded.contains(&p.label))
-        };
-        if all_loaded {
-            return;
+    let mut delivered = false;
+    loop {
+        let ready = state.overlay.lock().unwrap().take_loaded_frames(capture_id, &mut pending)?;
+        for payload in ready {
+            deliver(app, payload);
+            delivered = true;
+        }
+        if pending.is_empty() {
+            return Some(delivered);
+        }
+        if Instant::now() >= deadline {
+            let labels: Vec<_> = pending.iter().map(|payload| payload.label.as_str()).collect();
+            log::warn!("overlay pages did not load within {PAGE_LOAD_TIMEOUT:?}: {}", labels.join(", "));
+            return Some(delivered);
         }
         std::thread::sleep(Duration::from_millis(15));
     }
-    log::warn!("some overlay pages did not report loading in time");
+}
+
+fn cancel_if_no_overlay_ready(app: &AppHandle, capture_id: u64, delivered: bool) {
+    let state = app.state::<AppState>();
+    let stuck = {
+        let ov = state.overlay.lock().unwrap();
+        ov.is_current_capture(capture_id) && ov.shown.is_empty()
+    };
+    if stuck {
+        if delivered {
+            log::error!("no overlay became ready after waiting for page loading and {READY_TIMEOUT:?} for frame readiness, cancelling capture");
+        } else {
+            log::error!("no overlay page loaded within {PAGE_LOAD_TIMEOUT:?}, cancelling capture");
+        }
+        crate::telemetry::count("overlay_not_ready");
+        hide_all(app);
+        crate::notice::toast_error(app, crate::i18n::tr(state.lang(), "toast.captureFailed"), None);
+    }
 }
 
 fn deliver(app: &AppHandle, payload: PreparePayload) {
+    let state = app.state::<AppState>();
+    {
+        let ov = state.overlay.lock().unwrap();
+        if !ov.is_current_capture(payload.capture_id) || !ov.loaded.contains(&payload.label) {
+            return;
+        }
+    }
     #[cfg(windows)]
     if payload.transport == FrameTransport::Shared {
-        let frame = app.state::<AppState>().overlay.lock().unwrap().frames.get(&payload.label).cloned();
+        let frame = frame(app, payload.capture_id, &payload.label);
         if let (Some(win), Some(frame)) = (app.get_webview_window(&payload.label), frame) {
             let json = serde_json::to_string(&payload).unwrap_or_default();
             let fallback_app = app.clone();
@@ -515,7 +561,7 @@ fn deliver(app: &AppHandle, payload: PreparePayload) {
             crate::webview_win::post_frame(&win, frame, json, move |err| {
                 log::warn!("shared buffer hand-off failed ({err}), falling back to the protocol");
                 fallback.transport = FrameTransport::Protocol;
-                let _ = fallback_app.emit_to(fallback.label.as_str(), "overlay:prepare", &fallback);
+                deliver(&fallback_app, fallback);
             });
             return;
         }
@@ -529,12 +575,11 @@ fn deliver(app: &AppHandle, payload: PreparePayload) {
 pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     let state = app.state::<AppState>();
     let (elapsed, monitor, focus) = {
-        let mut ov = state.overlay.lock().unwrap();
+        let ov = state.overlay.lock().unwrap();
         // A monitor that was slow to get ready stays hidden once the area is chosen on another one.
-        if !ov.active || ov.capture_id != capture_id || ov.live.is_some() {
+        if !ov.is_current_capture(capture_id) || !ov.frames.contains_key(label) || ov.live.is_some() {
             return;
         }
-        ov.shown.insert(label.to_string());
         let monitor = ov.monitors.iter().find(|m| label_for(m) == label).cloned();
         (ov.started.map(|t| t.elapsed()), monitor, ov.focus.as_deref() == Some(label))
     };
@@ -542,7 +587,11 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     if let Some(m) = monitor {
         place(&win, &m);
     }
-    let _ = win.show();
+    if let Err(err) = win.show() {
+        log::warn!("could not show overlay {label}: {err}");
+        return;
+    }
+    state.overlay.lock().unwrap().shown.insert(label.to_string());
     // On macOS tao's always-on-top is the floating level, below the menu bar and the Dock.
     #[cfg(target_os = "macos")]
     crate::macos::overlay_shown(&win);
@@ -671,12 +720,7 @@ pub fn on_window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent)
         }
         tauri::WindowEvent::Destroyed => {
             let state = app.state::<AppState>();
-            let in_capture = {
-                let mut ov = state.overlay.lock().unwrap();
-                ov.loaded.remove(label);
-                // Not an overlay of this capture: rebuilt for other monitors, or released while idle.
-                ov.in_capture(label)
-            };
+            let in_capture = state.overlay.lock().unwrap().forget_page(label);
             if in_capture {
                 log::warn!("overlay {label} was destroyed during a capture");
                 hide_all(app);
@@ -692,7 +736,7 @@ pub fn on_window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent)
 #[cfg(target_os = "macos")]
 pub fn page_lost(app: &AppHandle, label: &str) {
     let state = app.state::<AppState>();
-    let in_capture = state.overlay.lock().unwrap().in_capture(label);
+    let in_capture = state.overlay.lock().unwrap().forget_page(label);
     if in_capture {
         log::warn!("overlay {label} lost its page during a capture");
         hide_all(app);
@@ -762,19 +806,36 @@ fn is_idle(last_used: Option<Instant>, now: Instant) -> bool {
 }
 
 impl OverlayState {
-    /// True when a capture starts now. While the idle release or an update holds the overlays, the request is
-    /// kept in `pending_capture` for when they are given back.
-    fn request_capture(&mut self, mode: CaptureMode) -> bool {
+    fn is_current_capture(&self, capture_id: u64) -> bool {
+        self.active && !self.releasing && self.capture_id == capture_id
+    }
+
+    fn take_loaded_frames(&self, capture_id: u64, pending: &mut Vec<PreparePayload>) -> Option<Vec<PreparePayload>> {
+        if !self.is_current_capture(capture_id) {
+            return None;
+        }
+        Some(pending.extract_if(.., |payload| self.loaded.contains(&payload.label)).collect())
+    }
+
+    fn forget_page(&mut self, label: &str) -> bool {
+        self.loaded.remove(label);
+        self.in_capture(label)
+    }
+
+    /// Claim the ID before the worker starts so a cancelled worker cannot publish frames for a later hotkey.
+    /// While the idle release or an update holds the overlays, the request waits in `pending_capture`.
+    fn request_capture(&mut self, mode: CaptureMode) -> Option<u64> {
         if self.active {
             if self.releasing {
                 self.pending_capture = Some(mode);
             }
-            return false;
+            return None;
         }
         self.active = true;
+        self.capture_id += 1;
         self.started = Some(Instant::now());
         self.last_used = self.started;
-        true
+        Some(self.capture_id)
     }
 
     /// Claimed like the idle release: no capture starts, and a hotkey press is kept in `pending_capture`.
@@ -835,7 +896,7 @@ pub fn release_update_claim(app: &AppHandle) {
 pub fn frame(app: &AppHandle, capture_id: u64, label: &str) -> Option<Arc<Frame>> {
     let state = app.state::<AppState>();
     let ov = state.overlay.lock().unwrap();
-    (ov.capture_id == capture_id).then(|| ov.frames.get(label).cloned()).flatten()
+    ov.is_current_capture(capture_id).then(|| ov.frames.get(label).cloned()).flatten()
 }
 
 #[cfg(test)]
@@ -848,6 +909,67 @@ mod tests {
 
     fn physical(m: &MonitorInfo) -> [f64; 4] {
         [f64::from(m.x), f64::from(m.y), f64::from(m.width), f64::from(m.height)]
+    }
+
+    fn prepare(ov: &mut OverlayState, id: &str) -> PreparePayload {
+        let monitor = monitor(id, 0, 0, 1, 1, 1.0);
+        let label = label_for(&monitor);
+        ov.frames.insert(label.clone(), Arc::new(Frame { width: 1, height: 1, rgba: vec![0; 4], capture_ms: 0.0 }));
+        PreparePayload {
+            capture_id: ov.capture_id,
+            frame_path: format!("frame/{}/{}", ov.capture_id, label),
+            label,
+            monitor,
+            transport: FrameTransport::Protocol,
+            width: 1,
+            height: 1,
+            set_letter: None,
+            set_count: 0,
+            set_full: false,
+            capture_ms: 0.0,
+            select_all: false,
+        }
+    }
+
+    #[test]
+    fn a_slow_overlay_gets_its_frame_only_after_registering() {
+        let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
+        let mut pending = vec![prepare(&mut ov, "0"), prepare(&mut ov, "1")];
+        ov.loaded.insert("overlay-0".into());
+
+        let ready = ov.take_loaded_frames(7, &mut pending).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].label, "overlay-0", "an already loaded monitor does not wait");
+        assert!(ov.take_loaded_frames(7, &mut pending).unwrap().is_empty());
+        assert_eq!(pending.len(), 1, "the slow page keeps its frame while it loads");
+
+        ov.loaded.insert("overlay-1".into());
+        let ready = ov.take_loaded_frames(7, &mut pending).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].frame_path, "frame/7/overlay-1");
+        assert!(pending.is_empty(), "one delivery per overlay");
+    }
+
+    #[test]
+    fn a_reloaded_page_cannot_take_a_cancelled_capture_or_reuse_its_old_registration() {
+        let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
+        let mut old = vec![prepare(&mut ov, "0")];
+        ov.loaded.insert("overlay-0".into());
+        ov.forget_page("overlay-0");
+        assert!(ov.take_loaded_frames(7, &mut old).unwrap().is_empty(), "old registration was cleared");
+
+        ov.active = false;
+        ov.frames.clear();
+        assert_eq!(ov.request_capture(CaptureMode::Area), Some(8));
+        assert!(!ov.is_current_capture(7), "the cancelled worker cannot publish frames");
+        assert!(ov.take_loaded_frames(7, &mut old).is_none());
+
+        let mut current = vec![prepare(&mut ov, "0")];
+        ov.loaded.insert("overlay-0".into());
+        assert!(ov.take_loaded_frames(7, &mut old).is_none());
+        let ready = ov.take_loaded_frames(8, &mut current).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].frame_path, "frame/8/overlay-0");
     }
 
     #[test]
@@ -883,7 +1005,7 @@ mod tests {
         assert!(ov.claim_for_update());
         assert!(ov.active && ov.releasing);
         assert!(!ov.claim_for_update());
-        assert!(!ov.request_capture(CaptureMode::FullScreen), "a hotkey press while claimed waits");
+        assert_eq!(ov.request_capture(CaptureMode::FullScreen), None, "a hotkey press while claimed waits");
         assert_eq!(ov.end_update_claim(), Some(CaptureMode::FullScreen), "and keeps its mode");
         assert!(!ov.active && !ov.releasing && ov.pending_capture.is_none());
         assert!(ov.claim_for_update());
@@ -893,10 +1015,10 @@ mod tests {
     #[test]
     fn a_capture_request_starts_one_capture() {
         let mut ov = OverlayState::default();
-        assert!(ov.request_capture(CaptureMode::Area));
+        assert_eq!(ov.request_capture(CaptureMode::Area), Some(1));
         assert!(ov.active && ov.started.is_some() && ov.last_used == ov.started);
-        assert!(!ov.request_capture(CaptureMode::Area), "one capture at a time");
-        assert!(!ov.request_capture(CaptureMode::FullScreen), "whatever the mode");
+        assert_eq!(ov.request_capture(CaptureMode::Area), None, "one capture at a time");
+        assert_eq!(ov.request_capture(CaptureMode::FullScreen), None, "whatever the mode");
         assert!(ov.pending_capture.is_none(), "a second press during a capture is dropped");
     }
 
@@ -930,7 +1052,7 @@ mod tests {
         let m = monitor("0", 0, 0, 3024, 1964, 2.0);
         let mut ov = OverlayState { monitors: vec![m.clone()], ..Default::default() };
         assert!(!ov.in_capture("overlay-0"), "hidden between captures: reloading the page is enough");
-        assert!(ov.request_capture(CaptureMode::Area));
+        assert_eq!(ov.request_capture(CaptureMode::Area), Some(1));
         assert!(ov.in_capture("overlay-0"));
         assert!(!ov.in_capture("overlay-1"), "built for a monitor that is gone");
         ov.finishing = true;

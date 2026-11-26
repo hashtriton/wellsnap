@@ -28,19 +28,21 @@ function webview2(): WebView2Bridge | undefined {
 export function listenForFrames(onFrame: (payload: PreparePayload, rgba: Uint8ClampedArray) => void): void {
   let latestCaptureId = -1;
   const bridge = webview2();
-  bridge?.addEventListener("sharedbufferreceived", (e) => {
-    const buffer = e.getBuffer();
-    try {
-      const payload = e.additionalData as PreparePayload;
-      if (payload.captureId < latestCaptureId) return;
-      latestCaptureId = payload.captureId;
-      onFrame(payload, new Uint8ClampedArray(buffer));
-    } finally {
-      bridge.releaseBuffer(buffer);
-    }
-  });
-  // Tell the core this page can receive frames (it waits for that after creating a window), but only once the
-  // listener is registered: otherwise the first prepare can arrive before it and the capture times out.
+  if (bridge) {
+    bridge.addEventListener("sharedbufferreceived", (e) => {
+      const buffer = e.getBuffer();
+      try {
+        const payload = e.additionalData as PreparePayload;
+        if (payload.captureId < latestCaptureId) return;
+        latestCaptureId = payload.captureId;
+        onFrame(payload, new Uint8ClampedArray(buffer));
+      } finally {
+        bridge.releaseBuffer(buffer);
+      }
+    });
+    void invoke("overlay_page_loaded", { shared: true, protocol: false });
+  }
+  // The protocol receiver needs a separate acknowledgment once Tauri has registered its listener.
   void events
     .onPrepare(async (payload) => {
       if (payload.captureId < latestCaptureId) return;
@@ -51,7 +53,7 @@ export function listenForFrames(onFrame: (payload: PreparePayload, rgba: Uint8Cl
       const bytes = await response.arrayBuffer();
       if (payload.captureId === latestCaptureId) onFrame(payload, new Uint8ClampedArray(bytes));
     })
-    .then(() => invoke("overlay_page_loaded"));
+    .then(() => invoke("overlay_page_loaded", { shared: Boolean(bridge), protocol: true }));
 }
 
 /** Draws RGBA pixels 1:1 into `canvas` (canvas size = physical pixels of the monitor). */

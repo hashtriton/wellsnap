@@ -8,6 +8,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::WebviewWindow;
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_ONLY, ICoreWebView2_2, ICoreWebView2_17, ICoreWebView2Controller,
     ICoreWebView2Environment12, ICoreWebView2SharedBuffer,
@@ -36,24 +39,21 @@ thread_local! {
     static BUFFERS: RefCell<HashMap<String, ICoreWebView2SharedBuffer>> = RefCell::new(HashMap::new());
 }
 
-/// Posts `frame` (RGBA) with `payload_json` as additional data. Errors are sent back through `on_error`
-/// because the work runs later on the UI thread.
+/// Posts `frame` (RGBA) with `payload_json` as additional data. COM errors go through `on_error`
+/// because that work runs later on the UI thread. Scheduling errors are returned immediately.
 pub fn post_frame(
     win: &WebviewWindow,
     frame: Arc<Frame>,
     payload_json: String,
     on_error: impl FnOnce(String) + Send + 'static,
-) {
+) -> tauri::Result<()> {
     let label = win.label().to_string();
-    let scheduled = win.with_webview(move |webview| {
+    win.with_webview(move |webview| {
         let result = unsafe { post_on_ui_thread(webview.controller(), &label, &frame, &payload_json) };
         if let Err(err) = result {
             on_error(err.to_string());
         }
-    });
-    if let Err(err) = scheduled {
-        log::error!("with_webview failed: {err}");
-    }
+    })
 }
 
 unsafe fn post_on_ui_thread(
@@ -81,6 +81,33 @@ unsafe fn post_on_ui_thread(
         });
         Ok(())
     }
+}
+
+pub fn show_overlay(win: &WebviewWindow, preserve_focus: bool) -> tauri::Result<()> {
+    let focus = if preserve_focus {
+        Some((win.hwnd()?, unsafe { GetForegroundWindow() }))
+    } else {
+        None
+    };
+    win.show()?;
+    let _ = win.set_always_on_top(true);
+    // Tao's show activates the window on Windows. Restore the previous foreground window only if
+    // the new overlay actually became active, leaving it focusable when the user clicks it.
+    if let Some((overlay, previous)) = focus
+        && !previous.0.is_null()
+        && previous != overlay
+        && unsafe { GetForegroundWindow() == overlay }
+    {
+        unsafe {
+            if GetWindowThreadProcessId(previous, None) == GetCurrentThreadId() {
+                let _ = SetActiveWindow(previous);
+            }
+            if GetForegroundWindow() == overlay && !SetForegroundWindow(previous).as_bool() {
+                log::warn!("could not restore foreground window after showing {}", win.label());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Frees the shared memory of all overlays (called on the UI thread after the overlays are hidden).

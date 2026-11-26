@@ -22,8 +22,8 @@ use tauri_plugin_opener::OpenerExt;
 const EXTERNAL_HOSTS: &[&str] = &["github.com", "wellsnap.net"];
 
 #[tauri::command]
-pub fn overlay_page_loaded(app: AppHandle, window: WebviewWindow) {
-    crate::overlay::on_page_loaded(&app, window.label());
+pub fn overlay_page_loaded(app: AppHandle, window: WebviewWindow, shared: bool, protocol: bool) {
+    crate::overlay::on_page_loaded(&app, window.label(), shared, protocol);
 }
 
 #[tauri::command]

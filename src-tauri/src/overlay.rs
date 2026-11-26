@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -36,8 +37,8 @@ static SCREEN_SETTINGS_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic
 pub struct OverlayState {
     /// Monitors the current overlay windows were built for.
     pub monitors: Vec<MonitorInfo>,
-    /// Overlay pages that finished loading and listen for frames.
-    pub loaded: HashSet<String>,
+    /// Frame receivers registered by each overlay page.
+    loaded: HashMap<String, FrameReceivers>,
     pub capture_id: u64,
     pub frames: HashMap<String, Arc<Frame>>,
     /// True from the hotkey until the overlays are hidden again (also while idle overlays are destroyed).
@@ -69,12 +70,34 @@ pub enum FrameTransport {
     Protocol,
 }
 
+#[derive(Default)]
+struct FrameReceivers {
+    shared: bool,
+    protocol: bool,
+}
+
+impl FrameReceivers {
+    fn accepts(&self, transport: FrameTransport) -> bool {
+        match transport {
+            FrameTransport::Shared => self.shared,
+            FrameTransport::Protocol => self.protocol,
+        }
+    }
+}
+
 /// What a capture starts with: the user selects an area, or the whole monitor under the pointer is selected
 /// already (the full screen hotkey).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
     Area,
     FullScreen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusOnShow {
+    Activate,
+    Preserve,
+    Default,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,8 +209,8 @@ fn place(win: &tauri::WebviewWindow, m: &MonitorInfo) {
     }
 }
 
-pub fn on_page_loaded(app: &AppHandle, label: &str) {
-    app.state::<AppState>().overlay.lock().unwrap().loaded.insert(label.to_string());
+pub fn on_page_loaded(app: &AppHandle, label: &str, shared: bool, protocol: bool) {
+    app.state::<AppState>().overlay.lock().unwrap().register_receivers(label, shared, protocol);
 }
 
 /// Entry point for the hotkey, tray and "new snapshot" buttons.
@@ -299,7 +322,8 @@ fn run_capture(app: &AppHandle, capture_id: u64, notice_hidden: bool, mode: Capt
         let _ = app.run_on_main_thread(move || report_capture_failure(&ui_app, capture_id, denied));
         return;
     }
-    let Some(delivered) = deliver_to_loaded_pages(app, capture_id, prepared) else { return };
+    let page_deadline = Instant::now() + PAGE_LOAD_TIMEOUT;
+    let Some(delivered) = deliver_to_loaded_pages(app, capture_id, prepared, page_deadline) else { return };
     // Time spent starting a webview is separate from the time allowed to draw a delivered frame.
     if delivered {
         std::thread::sleep(READY_TIMEOUT);
@@ -503,22 +527,30 @@ fn focus_target(
 
 /// Starts each hand-off as soon as its page has a receiver, without holding up the other monitors.
 /// An unregistered page cannot receive prepare, so keep its payload until it loads or the deadline expires.
-fn deliver_to_loaded_pages(app: &AppHandle, capture_id: u64, mut pending: Vec<PreparePayload>) -> Option<bool> {
+fn deliver_to_loaded_pages(
+    app: &AppHandle,
+    capture_id: u64,
+    mut pending: Vec<PreparePayload>,
+    page_deadline: Instant,
+) -> Option<bool> {
     let state = app.state::<AppState>();
-    let deadline = Instant::now() + PAGE_LOAD_TIMEOUT;
+    let (shared_pending, shared_done) = mpsc::channel();
     let mut delivered = false;
     loop {
         let ready = state.overlay.lock().unwrap().take_loaded_frames(capture_id, &mut pending)?;
         for payload in ready {
-            deliver(app, payload);
+            deliver(app, payload, page_deadline, &shared_pending);
             delivered = true;
         }
         if pending.is_empty() {
+            // Each outstanding shared delivery holds a sender until it posts or finishes its fallback.
+            drop(shared_pending);
+            let _ = shared_done.recv_timeout(page_deadline.saturating_duration_since(Instant::now()));
             return Some(delivered);
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= page_deadline {
             let labels: Vec<_> = pending.iter().map(|payload| payload.label.as_str()).collect();
-            log::warn!("overlay pages did not load within {PAGE_LOAD_TIMEOUT:?}: {}", labels.join(", "));
+            log::warn!("overlay frame receivers did not register within {PAGE_LOAD_TIMEOUT:?}: {}", labels.join(", "));
             return Some(delivered);
         }
         std::thread::sleep(Duration::from_millis(15));
@@ -543,29 +575,38 @@ fn cancel_if_no_overlay_ready(app: &AppHandle, capture_id: u64, delivered: bool)
     }
 }
 
-fn deliver(app: &AppHandle, payload: PreparePayload) {
+fn deliver(app: &AppHandle, payload: PreparePayload, page_deadline: Instant, shared_pending: &mpsc::Sender<()>) {
     let state = app.state::<AppState>();
     {
         let ov = state.overlay.lock().unwrap();
-        if !ov.is_current_capture(payload.capture_id) || !ov.loaded.contains(&payload.label) {
+        let receiver = ov.loaded.get(&payload.label);
+        if !ov.is_current_capture(payload.capture_id) || !receiver.is_some_and(|r| r.accepts(payload.transport)) {
             return;
         }
     }
     #[cfg(windows)]
     if payload.transport == FrameTransport::Shared {
-        let frame = frame(app, payload.capture_id, &payload.label);
-        if let (Some(win), Some(frame)) = (app.get_webview_window(&payload.label), frame) {
-            let json = serde_json::to_string(&payload).unwrap_or_default();
-            let fallback_app = app.clone();
-            let mut fallback = payload.clone();
-            crate::webview_win::post_frame(&win, frame, json, move |err| {
-                log::warn!("shared buffer hand-off failed ({err}), falling back to the protocol");
-                fallback.transport = FrameTransport::Protocol;
-                deliver(&fallback_app, fallback);
+        let Some(win) = app.get_webview_window(&payload.label) else { return };
+        let Some(frame) = frame(app, payload.capture_id, &payload.label) else { return };
+        let json = serde_json::to_string(&payload).unwrap_or_default();
+        let fallback_app = app.clone();
+        let shared_pending = shared_pending.clone();
+        let retry_via_protocol = move |err: String| {
+            log::warn!("shared buffer hand-off failed ({err}), falling back to the protocol");
+            let mut payload = payload;
+            payload.transport = FrameTransport::Protocol;
+            std::thread::spawn(move || {
+                deliver_to_loaded_pages(&fallback_app, payload.capture_id, vec![payload], page_deadline);
+                drop(shared_pending);
             });
-            return;
+        };
+        if let Err(err) = crate::webview_win::post_frame(&win, frame, json, retry_via_protocol.clone()) {
+            retry_via_protocol(err.to_string());
         }
+        return;
     }
+    #[cfg(not(windows))]
+    let _ = (page_deadline, shared_pending);
     if let Err(err) = app.emit_to(payload.label.as_str(), "overlay:prepare", &payload) {
         log::error!("could not notify {}: {err}", payload.label);
     }
@@ -581,13 +622,17 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
             return;
         }
         let monitor = ov.monitors.iter().find(|m| label_for(m) == label).cloned();
-        (ov.started.map(|t| t.elapsed()), monitor, ov.focus.as_deref() == Some(label))
+        (ov.started.map(|t| t.elapsed()), monitor, ov.focus_on_show(label))
     };
     let Some(win) = app.get_webview_window(label) else { return };
     if let Some(m) = monitor {
         place(&win, &m);
     }
-    if let Err(err) = win.show() {
+    #[cfg(windows)]
+    let show = crate::webview_win::show_overlay(&win, focus == FocusOnShow::Preserve);
+    #[cfg(not(windows))]
+    let show = win.show();
+    if let Err(err) = show {
         log::warn!("could not show overlay {label}: {err}");
         return;
     }
@@ -595,15 +640,15 @@ pub fn on_ready(app: &AppHandle, label: &str, capture_id: u64) {
     // On macOS tao's always-on-top is the floating level, below the menu bar and the Dock.
     #[cfg(target_os = "macos")]
     crate::macos::overlay_shown(&win);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = win.set_always_on_top(true);
-    if focus {
+    if focus == FocusOnShow::Activate {
         let _ = win.set_focus();
     }
     if let Some(elapsed) = elapsed {
         log::info!("overlay {label} visible {:.0} ms after hotkey", elapsed.as_secs_f64() * 1000.0);
         // Once per capture: the overlay that takes focus is the one under the cursor.
-        if focus {
+        if focus == FocusOnShow::Activate {
             crate::telemetry::metric(label, "hotkeyToVisibleMs", elapsed.as_secs_f64() * 1000.0);
         }
     }
@@ -810,11 +855,37 @@ impl OverlayState {
         self.active && !self.releasing && self.capture_id == capture_id
     }
 
+    fn register_receivers(&mut self, label: &str, shared: bool, protocol: bool) {
+        let receivers = self.loaded.entry(label.to_string()).or_default();
+        receivers.shared |= shared;
+        receivers.protocol |= protocol;
+    }
+
+    fn focus_on_show(&self, label: &str) -> FocusOnShow {
+        if self.focus.as_deref() == Some(label) {
+            FocusOnShow::Activate
+        } else if !self.shown.is_empty() {
+            FocusOnShow::Preserve
+        } else {
+            FocusOnShow::Default
+        }
+    }
+
     fn take_loaded_frames(&self, capture_id: u64, pending: &mut Vec<PreparePayload>) -> Option<Vec<PreparePayload>> {
         if !self.is_current_capture(capture_id) {
             return None;
         }
-        Some(pending.extract_if(.., |payload| self.loaded.contains(&payload.label)).collect())
+        Some(
+            pending
+                .extract_if(.., |payload| {
+                    let Some(receivers) = self.loaded.get(&payload.label) else { return false };
+                    if payload.transport == FrameTransport::Shared && !receivers.shared && receivers.protocol {
+                        payload.transport = FrameTransport::Protocol;
+                    }
+                    receivers.accepts(payload.transport)
+                })
+                .collect(),
+        )
     }
 
     fn forget_page(&mut self, label: &str) -> bool {
@@ -935,7 +1006,7 @@ mod tests {
     fn a_slow_overlay_gets_its_frame_only_after_registering() {
         let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
         let mut pending = vec![prepare(&mut ov, "0"), prepare(&mut ov, "1")];
-        ov.loaded.insert("overlay-0".into());
+        ov.register_receivers("overlay-0", false, true);
 
         let ready = ov.take_loaded_frames(7, &mut pending).unwrap();
         assert_eq!(ready.len(), 1);
@@ -943,7 +1014,7 @@ mod tests {
         assert!(ov.take_loaded_frames(7, &mut pending).unwrap().is_empty());
         assert_eq!(pending.len(), 1, "the slow page keeps its frame while it loads");
 
-        ov.loaded.insert("overlay-1".into());
+        ov.register_receivers("overlay-1", false, true);
         let ready = ov.take_loaded_frames(7, &mut pending).unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].frame_path, "frame/7/overlay-1");
@@ -951,10 +1022,46 @@ mod tests {
     }
 
     #[test]
+    fn shared_delivery_and_its_fallback_wait_for_their_own_receivers() {
+        let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
+        let mut payload = prepare(&mut ov, "0");
+        payload.transport = FrameTransport::Shared;
+        let mut pending = vec![payload];
+        ov.register_receivers("overlay-0", true, false);
+
+        let mut ready = ov.take_loaded_frames(7, &mut pending).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].transport, FrameTransport::Shared);
+        assert!(pending.is_empty());
+
+        ready[0].transport = FrameTransport::Protocol;
+        assert!(ov.take_loaded_frames(7, &mut ready).unwrap().is_empty());
+        ov.register_receivers("overlay-0", true, true);
+        ov.register_receivers("overlay-0", true, false);
+        let fallback = ov.take_loaded_frames(7, &mut ready).unwrap();
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].transport, FrameTransport::Protocol);
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn a_page_without_a_shared_buffer_bridge_receives_the_protocol_frame() {
+        let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
+        let mut payload = prepare(&mut ov, "0");
+        payload.transport = FrameTransport::Shared;
+        let mut pending = vec![payload];
+        ov.register_receivers("overlay-0", false, true);
+
+        let ready = ov.take_loaded_frames(7, &mut pending).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].transport, FrameTransport::Protocol);
+    }
+
+    #[test]
     fn a_reloaded_page_cannot_take_a_cancelled_capture_or_reuse_its_old_registration() {
         let mut ov = OverlayState { active: true, capture_id: 7, ..Default::default() };
         let mut old = vec![prepare(&mut ov, "0")];
-        ov.loaded.insert("overlay-0".into());
+        ov.register_receivers("overlay-0", true, true);
         ov.forget_page("overlay-0");
         assert!(ov.take_loaded_frames(7, &mut old).unwrap().is_empty(), "old registration was cleared");
 
@@ -965,7 +1072,7 @@ mod tests {
         assert!(ov.take_loaded_frames(7, &mut old).is_none());
 
         let mut current = vec![prepare(&mut ov, "0")];
-        ov.loaded.insert("overlay-0".into());
+        ov.register_receivers("overlay-0", true, true);
         assert!(ov.take_loaded_frames(7, &mut old).is_none());
         let ready = ov.take_loaded_frames(8, &mut current).unwrap();
         assert_eq!(ready.len(), 1);
@@ -1020,6 +1127,21 @@ mod tests {
         assert_eq!(ov.request_capture(CaptureMode::Area), None, "one capture at a time");
         assert_eq!(ov.request_capture(CaptureMode::FullScreen), None, "whatever the mode");
         assert!(ov.pending_capture.is_none(), "a second press during a capture is dropped");
+    }
+
+    #[test]
+    fn a_late_secondary_overlay_preserves_focus() {
+        let mut ov = OverlayState { focus: Some("overlay-0".into()), ..Default::default() };
+        assert_eq!(ov.focus_on_show("overlay-1"), FocusOnShow::Default, "the first visible overlay is usable");
+        ov.shown.insert("overlay-1".into());
+        assert_eq!(
+            ov.focus_on_show("overlay-0"),
+            FocusOnShow::Activate,
+            "the monitor under the pointer takes focus even if it loads second"
+        );
+
+        ov.shown.insert("overlay-0".into());
+        assert_eq!(ov.focus_on_show("overlay-2"), FocusOnShow::Preserve, "a late overlay keeps the current focus");
     }
 
     #[test]

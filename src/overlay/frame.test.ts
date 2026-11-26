@@ -22,7 +22,46 @@ describe("listenForFrames", () => {
     await Promise.resolve();
     expect(core.invoke).not.toHaveBeenCalled();
     registered();
-    await vi.waitFor(() => expect(core.invoke).toHaveBeenCalledWith("overlay_page_loaded"));
+    await vi.waitFor(() => {
+      expect(core.invoke).toHaveBeenCalledExactlyOnceWith("overlay_page_loaded", { shared: false, protocol: true });
+    });
+  });
+
+  it("receives shared frames immediately and still discards them after a newer protocol frame", async () => {
+    let registered: () => void = () => {};
+    ipc.events.onPrepare.mockReturnValueOnce(new Promise<() => void>((resolve) => (registered = () => resolve(() => {}))));
+    const addEventListener = vi.fn();
+    const releaseBuffer = vi.fn();
+    vi.stubGlobal("window", { chrome: { webview: { addEventListener, releaseBuffer } } });
+    const onFrame = vi.fn();
+    listenForFrames(onFrame);
+
+    expect(addEventListener).toHaveBeenCalledExactlyOnceWith("sharedbufferreceived", expect.any(Function));
+    expect(addEventListener.mock.invocationCallOrder[0]!).toBeLessThan(core.invoke.mock.invocationCallOrder[0]!);
+    expect(core.invoke).toHaveBeenCalledExactlyOnceWith("overlay_page_loaded", { shared: true, protocol: false });
+    const receiveShared = addEventListener.mock.lastCall![1];
+    const buffer = new ArrayBuffer(4);
+    const payload = { captureId: 7, transport: "shared" };
+    receiveShared({ getBuffer: () => buffer, additionalData: payload });
+    expect(onFrame).toHaveBeenCalledExactlyOnceWith(payload, new Uint8ClampedArray(buffer));
+    expect(releaseBuffer).toHaveBeenCalledExactlyOnceWith(buffer);
+
+    registered();
+    await vi.waitFor(() => {
+      expect(core.invoke).toHaveBeenNthCalledWith(2, "overlay_page_loaded", { shared: true, protocol: true });
+    });
+
+    const next = { captureId: 8, transport: "protocol", framePath: "frame/8/overlay-0" } as PreparePayload;
+    const nextBytes = new ArrayBuffer(8);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, arrayBuffer: async () => nextBytes })));
+    const receiveProtocol: (payload: PreparePayload) => Promise<void> = ipc.events.onPrepare.mock.lastCall![0];
+    await receiveProtocol(next);
+
+    const staleBuffer = new ArrayBuffer(4);
+    receiveShared({ getBuffer: () => staleBuffer, additionalData: payload });
+    expect(onFrame).toHaveBeenCalledTimes(2);
+    expect(onFrame).toHaveBeenLastCalledWith(next, new Uint8ClampedArray(nextBytes));
+    expect(releaseBuffer).toHaveBeenLastCalledWith(staleBuffer);
   });
 
   it("keeps a late frame from replacing the next capture", async () => {
